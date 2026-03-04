@@ -9,8 +9,10 @@ using SwarmUI.Core;
 using SwarmUI.Text2Image;
 using SwarmUI.Utils;
 using SwarmUI.WebAPI;
+using SwarmUI.Builtin_ComfyUIBackend.ViteUI;
 using System.IO;
 using System.Net.Http;
+using Microsoft.AspNetCore.Http;
 
 namespace SwarmUI.Builtin_ComfyUIBackend;
 
@@ -80,6 +82,11 @@ public class ComfyUIBackendExtension : Extension
         Program.ModelPathsChangedEvent += OnModelPathsChanged;
         ScriptFiles.Add("Assets/comfy_workflow_editor_helper.js");
         StyleSheetFiles.Add("Assets/comfy_workflow_editor.css");
+        ScriptFiles.Add("Assets/viteui_shell.js");
+        StyleSheetFiles.Add("Assets/viteui_shell.css");
+        OtherAssets.Add("Assets/viteui_studio.html");
+        OtherAssets.Add("Assets/viteui_studio.js");
+        OtherAssets.Add("Assets/viteui_studio.css");
         T2IParamTypes.FakeTypeProviders.Add(DynamicParamGenerator);
         // Temporary: remove old pycache files where we used to have python files, to prevent Comfy boot errors
         Utilities.RemoveBadPycacheFrom($"{FilePath}/ExtraNodes");
@@ -808,6 +815,8 @@ public class ComfyUIBackendExtension : Extension
         SwarmSwarmBackend.ValidityChecks[BackendApiType.ID] = (backend, input) => ComfyUIAPIAbstractBackend.TryIsValid(input, backend.ExtensionData.GetValueOrDefault("ComfyNodeTypes", null) as HashSet<string>);
         SwarmSwarmBackend.ValidityChecks[BackendSelfStartType.ID] = SwarmSwarmBackend.ValidityChecks[BackendApiType.ID];
         ComfyUIWebAPI.Register();
+        ViteUIWebAPI.Register();
+        T2IEngine.AltBackendValidators.Add(ViteUIExecutionMode.ValidateBackend);
     }
 
     public BackendHandler.BackendType BackendApiType, BackendSelfStartType;
@@ -815,6 +824,57 @@ public class ComfyUIBackendExtension : Extension
     public override void OnPreLaunch()
     {
         WebServer.WebApp.Map("/ComfyBackendDirect/{*Path}", ComfyUIRedirectHelper.ComfyBackendDirectHandler);
+        RegisterViteUIRoutes();
+    }
+
+    private static readonly Dictionary<string, (string FileName, string ContentType)> ViteUIAssetMap = new()
+    {
+        ["viteui_studio.css"] = ("viteui_studio.css", "text/css"),
+        ["viteui_studio.js"] = ("viteui_studio.js", "text/javascript")
+    };
+
+    private static void RegisterViteUIRoutes()
+    {
+        static IResult studioHtml()
+        {
+            string htmlPath = Path.Combine(Folder, "Assets", "viteui_studio.html");
+            if (!File.Exists(htmlPath))
+            {
+                return Results.NotFound();
+            }
+            return Results.Text(File.ReadAllText(htmlPath), "text/html");
+        }
+        static IResult studioAsset(string asset)
+        {
+            asset = asset?.Replace('\\', '/').AfterLast('/');
+            if (!string.IsNullOrWhiteSpace(asset))
+            {
+                asset = asset.Before('?').Before('#');
+            }
+            if (string.IsNullOrWhiteSpace(asset) || !ViteUIAssetMap.TryGetValue(asset, out (string FileName, string ContentType) data))
+            {
+                return Results.NotFound();
+            }
+            string filePath = Path.Combine(Folder, "Assets", data.FileName);
+            if (!File.Exists(filePath))
+            {
+                return Results.NotFound();
+            }
+            return Results.Text(File.ReadAllText(filePath), data.ContentType);
+        }
+
+        // Canonical route and direct-comfy aliases all serve the same content.
+        WebServer.WebApp.MapGet("/ViteUI/Studio", () => studioHtml());
+        WebServer.WebApp.MapGet("/ViteUI/Studio/assets/{*asset}", (string asset) => studioAsset(asset));
+
+        WebServer.WebApp.MapGet("/ComfyBackendDirect/ViteUI/Studio", () => studioHtml());
+        WebServer.WebApp.MapGet("/ComfyBackendDirect/ViteUI/Studio/assets/{*asset}", (string asset) => studioAsset(asset));
+        WebServer.WebApp.MapGet("/ComfyBackendDirect/ExtensionFile/ComfyUIBackendExtension/Assets/viteui_studio.html", () => studioHtml());
+        WebServer.WebApp.MapGet("/ComfyBackendDirect/ExtensionFile/ComfyUIBackend/Assets/viteui_studio.html", () => studioHtml());
+        WebServer.WebApp.MapGet("/ComfyBackendDirect/ExtensionFile/ComfyUIBackendExtension/Assets/viteui_studio.js", () => studioAsset("viteui_studio.js"));
+        WebServer.WebApp.MapGet("/ComfyBackendDirect/ExtensionFile/ComfyUIBackend/Assets/viteui_studio.js", () => studioAsset("viteui_studio.js"));
+        WebServer.WebApp.MapGet("/ComfyBackendDirect/ExtensionFile/ComfyUIBackendExtension/Assets/viteui_studio.css", () => studioAsset("viteui_studio.css"));
+        WebServer.WebApp.MapGet("/ComfyBackendDirect/ExtensionFile/ComfyUIBackend/Assets/viteui_studio.css", () => studioAsset("viteui_studio.css"));
     }
 
     public record struct ComfyBackendData(HttpClient Client, string APIAddress, string WebAddress, AbstractT2IBackend Backend);
