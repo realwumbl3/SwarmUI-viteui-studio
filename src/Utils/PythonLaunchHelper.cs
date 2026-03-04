@@ -1,14 +1,112 @@
-﻿using FreneticUtilities.FreneticExtensions;
+using FreneticUtilities.FreneticExtensions;
 using SwarmUI.Core;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Collections;
+using System.Linq;
 
 namespace SwarmUI.Utils;
 
 /// <summary>Tiny specialty class to help launch python programs easily.</summary>
 public class PythonLaunchHelper
 {
+    /// <summary>On Windows, ensure CUDA env vars are available for subprocesses (eg CuPy custom nodes).</summary>
+    public static void EnsureCudaEnvironment(ProcessStartInfo start, string prefix)
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return;
+        }
+        string pickCudaPath()
+        {
+            // Prefer explicitly set values if they point to a real folder.
+            string[] directVars = ["CUDA_PATH", "CUDA_HOME"];
+            foreach (string key in directVars)
+            {
+                string val = start.Environment.TryGetValue(key, out string got) ? got : Environment.GetEnvironmentVariable(key);
+                if (!string.IsNullOrWhiteSpace(val) && Directory.Exists(val))
+                {
+                    return val;
+                }
+            }
+            // Windows also commonly stores versioned vars like CUDA_PATH_V12_6.
+            List<string> versioned = [];
+            IDictionary allEnv = Environment.GetEnvironmentVariables();
+            foreach (DictionaryEntry entry in allEnv)
+            {
+                string key = entry.Key?.ToString() ?? "";
+                if (key.StartsWith("CUDA_PATH_V", StringComparison.OrdinalIgnoreCase))
+                {
+                    string val = entry.Value?.ToString();
+                    if (!string.IsNullOrWhiteSpace(val) && Directory.Exists(val))
+                    {
+                        versioned.Add(val);
+                    }
+                }
+            }
+            if (versioned.Count > 0)
+            {
+                return versioned.OrderByDescending(v => v).First();
+            }
+            // Final fallback: probe default CUDA Toolkit install root.
+            string toolkitRoot = @"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA";
+            if (Directory.Exists(toolkitRoot))
+            {
+                string[] subdirs = Directory.GetDirectories(toolkitRoot, "v*");
+                if (subdirs.Length > 0)
+                {
+                    return subdirs.OrderByDescending(v => v).First();
+                }
+            }
+            // Fallback for embedded/python-packaged CUDA runtime (used by CuPy wheels).
+            // This is common when only PyTorch CUDA runtime wheels are installed.
+            string[] packagedRoots =
+            [
+                Path.GetFullPath(Path.Combine(start.WorkingDirectory ?? ".", "..", "python_embeded", "Lib", "site-packages", "nvidia", "cuda_runtime")),
+                Path.GetFullPath(Path.Combine(start.WorkingDirectory ?? ".", "..", "..", "python_embeded", "Lib", "site-packages", "nvidia", "cuda_runtime")),
+                Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "dlbackend", "comfy", "python_embeded", "Lib", "site-packages", "nvidia", "cuda_runtime"))
+            ];
+            foreach (string packagedRoot in packagedRoots)
+            {
+                if (Directory.Exists(packagedRoot))
+                {
+                    return packagedRoot;
+                }
+            }
+            // CUDA 13 runtime wheels may use nvidia/cuXX folder naming.
+            string[] nvidiaRoots =
+            [
+                Path.GetFullPath(Path.Combine(start.WorkingDirectory ?? ".", "..", "python_embeded", "Lib", "site-packages", "nvidia")),
+                Path.GetFullPath(Path.Combine(start.WorkingDirectory ?? ".", "..", "..", "python_embeded", "Lib", "site-packages", "nvidia")),
+                Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "dlbackend", "comfy", "python_embeded", "Lib", "site-packages", "nvidia"))
+            ];
+            foreach (string nvidiaRoot in nvidiaRoots.Distinct())
+            {
+                if (!Directory.Exists(nvidiaRoot))
+                {
+                    continue;
+                }
+                string[] cuDirs = Directory.GetDirectories(nvidiaRoot, "cu*");
+                if (cuDirs.Length > 0)
+                {
+                    return cuDirs.OrderByDescending(v => v).First();
+                }
+            }
+            return null;
+        }
+        string cudaPath = pickCudaPath();
+        if (!string.IsNullOrWhiteSpace(cudaPath))
+        {
+            start.Environment["CUDA_PATH"] = cudaPath;
+            if (!start.Environment.ContainsKey("CUDA_HOME"))
+            {
+                start.Environment["CUDA_HOME"] = cudaPath;
+            }
+            Logs.Debug($"{prefix}Using CUDA_PATH={cudaPath}");
+        }
+    }
+
     /// <summary>Clean up a <see cref="ProcessStartInfo"/> environment of python env vars that cause problems.</summary>
     public static void CleanEnvironmentOfPythonMess(ProcessStartInfo start, string prefix)
     {
@@ -33,6 +131,7 @@ public class PythonLaunchHelper
         start.Environment["DISABLE_TELEMETRY"] = "true"; // Tell HF no telemetry
         start.Environment["DO_NOT_TRACK"] = "true"; // Generic telemetry disable
         start.Environment["PYTHONUTF8"] = "1"; // Python is a silly program, remind it to use the only possibly relevant character encoding
+        EnsureCudaEnvironment(start, prefix);
     }
 
     /// <summary>Helper to fix up python paths in environment PATH var.</summary>

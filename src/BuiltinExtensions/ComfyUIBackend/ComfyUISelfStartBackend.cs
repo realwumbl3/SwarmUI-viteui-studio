@@ -516,6 +516,33 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
             {
                 return getRawVersion(package)?.Before('+');
             }
+            (string packageName, string versionSpec)? getCudaRuntimeWheelTarget()
+            {
+                string torchRawVersion = getRawVersion("torch");
+                if (string.IsNullOrWhiteSpace(torchRawVersion) || !torchRawVersion.Contains('+'))
+                {
+                    return null;
+                }
+                string cudaTag = torchRawVersion.After('+').ToLowerFast();
+                if (!cudaTag.StartsWith("cu"))
+                {
+                    return null;
+                }
+                string digits = cudaTag[2..];
+                if (digits.Length < 2 || !digits.All(char.IsDigit))
+                {
+                    return null;
+                }
+                int major = int.Parse(digits[..2]);
+                int minor = digits.Length > 2 ? int.Parse(digits[2..]) : 0;
+                string packageName = major switch
+                {
+                    11 => "nvidia-cuda-runtime-cu11",
+                    12 => "nvidia-cuda-runtime-cu12",
+                    _ => "nvidia-cuda-runtime"
+                };
+                return (packageName, $"{major}.{minor}.*");
+            }
             if (!libs.Contains("pip"))
             {
                 Logs.Warning($"Python lib folder at '{lib}' appears to not contain pip. Python operations will likely fail. Please make sure your system has a valid python3-pip install.");
@@ -528,6 +555,23 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
             if (numpyVers is null || ParseVersion(numpyVers) < Version.Parse("1.25"))
             {
                 await update("numpy", "numpy==1.26.4");
+            }
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && libs.Contains("cupy"))
+            {
+                // CuPy JIT kernels may still need CUDA headers even when torch+cuda works.
+                // If no CUDA Toolkit is installed, use NVIDIA runtime wheels as a fallback.
+                bool hasToolkit = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("CUDA_PATH"))
+                    || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("CUDA_HOME"))
+                    || Directory.Exists(@"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA");
+                bool hasRuntimeWheelPath = Directory.Exists(Path.Combine(lib, "nvidia", "cuda_runtime", "include"));
+                if (!hasToolkit && !hasRuntimeWheelPath)
+                {
+                    (string packageName, string versionSpec)? runtimeTarget = getCudaRuntimeWheelTarget();
+                    if (runtimeTarget is not null)
+                    {
+                        await update("nvidia_cuda_runtime", $"{runtimeTarget.Value.packageName}=={runtimeTarget.Value.versionSpec}");
+                    }
+                }
             }
             foreach ((string libFolder, string pipName, string rel, string version) in RequiredVersionPythonPackages)
             {
