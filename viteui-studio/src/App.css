@@ -1,0 +1,49 @@
+/* React Flow overrides for dark theme */
+.react-flow__node {
+  border-radius: 8px;
+}
+
+.react-flow__node.selected {
+  box-shadow: 0 0 0 2px #3b82f6;
+}
+
+.react-flow__edge {
+  stroke: #6b7280;
+}
+
+.react-flow__edge.selected {
+  stroke: #3b82f6;
+  stroke-width: 3px;
+}
+
+.react-flow__controls {
+  bottom: 20px;
+  left: 20px;
+}
+
+.react-flow__minimap {
+  bottom: 20px;
+  right: 20px;
+}
+
+.react-flow__attribution {
+  display: none;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1f2937;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4b5563;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
+}

@@ -30,3 +30,5 @@ docker-compose.yml
 __pycache__/
 venv/
 *.pth
+*/node_modules/*
+viteui-studio-codebase-ref-only/

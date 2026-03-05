@@ -312,7 +312,7 @@ public class T2IParamTypes
         return update;
     }
 
-    public static T2IRegisteredParam<string> Prompt, NegativePrompt, AspectRatio, BackendType, RefinerMethod, FreeUApplyTo, FreeUVersion, PersonalNote, VideoFormat, VideoResolution, UnsamplerPrompt, ImageFormat, MaskBehavior, ColorCorrectionBehavior, RawResolution, SeamlessTileable, SD3TextEncs, BitDepth, Webhooks, WildcardSeedBehavior, SegmentSortOrder, SegmentTargetResolution, SegmentApplyAfter, TorchCompile, VideoExtendFormat, ExactBackendID, OverridePredictionType, OverrideOutpathFormat, Text2AudioTimeSignature, Text2AudioLanguage, Text2AudioKeyScale, Text2AudioStyle;
+    public static T2IRegisteredParam<string> Prompt, NegativePrompt, AspectRatio, BackendType, ExecutionMode, RefinerMethod, FreeUApplyTo, FreeUVersion, PersonalNote, VideoFormat, VideoResolution, UnsamplerPrompt, ImageFormat, MaskBehavior, ColorCorrectionBehavior, RawResolution, SeamlessTileable, SD3TextEncs, BitDepth, Webhooks, WildcardSeedBehavior, SegmentSortOrder, SegmentTargetResolution, SegmentApplyAfter, TorchCompile, VideoExtendFormat, ExactBackendID, OverridePredictionType, OverrideOutpathFormat, Text2AudioTimeSignature, Text2AudioLanguage, Text2AudioKeyScale, Text2AudioStyle;
     public static T2IRegisteredParam<int> Images, Steps, Width, Height, SideLength, BatchSize, VAETileSize, VAETileOverlap, VAETemporalTileSize, VAETemporalTileOverlap, ClipStopAtLayer, VideoFrames, VideoMotionBucket, VideoFPS, VideoSteps, RefinerSteps, CascadeLatentCompression, MaskShrinkGrow, MaskBlur, MaskGrow, SegmentMaskBlur, SegmentMaskGrow, SegmentMaskOversize, SegmentSteps, Text2VideoFrames, TrimVideoStartFrames, TrimVideoEndFrames, VideoExtendFrameOverlap;
     public static T2IRegisteredParam<long> Seed, VariationSeed, WildcardSeed, Text2AudioBPM;
     public static T2IRegisteredParam<double> CFGScale, VariationSeedStrength, InitImageCreativity, InitImageResetToNorm, InitImageNoise, RefinerControl, RefinerUpscale, RefinerCFGScale, ReVisionStrength, AltResolutionHeightMult,
@@ -754,6 +754,9 @@ public class T2IParamTypes
             ));
         Webhooks = Register<string>(new("Webhooks", "What webhooks are enabled for this generation job.",
             "Normal", IgnoreIf: "Normal", GetValues: (_) => ["None", "Normal///Normal (fire 'Every Gen')", "Manual///Manual (fire 'Every Gen' and 'Manual' for each image)", "Manual At End///Manual At End (fire 'Every Gen', then one 'Manual' for the full set of queued gens)"], IsAdvanced: true, AlwaysRetain: true, Group: GroupSwarmInternal, OrderPriority: -12
+            ));
+        ExecutionMode = Register<string>(new("[Internal] Execution Mode", "Which execution engine should be used for this request.\nUsed by ViteUI to route between internal and Comfy controller paths.",
+            "any", IgnoreIf: "any", GetValues: (_) => ["any", "internal", "comfy_controller"], IsAdvanced: true, Group: GroupSwarmInternal, AlwaysRetain: true, HideFromMetadata: true, VisibleNormally: false, OrderPriority: -11.5
             ));
         BackendType = Register<string>(new("[Internal] Backend Type", "Which SwarmUI backend type should be used for this request.",
             "Any", IgnoreIf: "Any", GetValues: (_) => ["Any", .. Program.Backends.BackendTypes.Values.Select(b => $"{b.ID}///{b.Name}")],

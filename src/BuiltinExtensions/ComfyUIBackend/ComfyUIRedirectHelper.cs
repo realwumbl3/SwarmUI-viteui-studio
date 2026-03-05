@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticExtensions;
+using FreneticUtilities.FreneticExtensions;
 using FreneticUtilities.FreneticToolkit;
 using Microsoft.AspNetCore.Http;
 using Newtonsoft.Json.Linq;
@@ -85,6 +85,40 @@ public class ComfyUIRedirectHelper
             context.Response.ContentType = "text/html";
             context.Response.StatusCode = 401;
             await context.Response.WriteAsync("<!DOCTYPE html>\n<html>\n<head>\n<style>body{background-color:#101010;color:#eeeeee;}</style>\n</head>\n<body>\n<span class=\"comfy-failed-to-load\">Permission denied.</span>\n</body>\n</html>");
+            await context.Response.CompleteAsync();
+            return;
+        }
+        string rawPath = context.Request.Path.Value ?? "";
+        if (rawPath.StartsWith("/ComfyBackendDirect/ViteUI/Studio", StringComparison.OrdinalIgnoreCase)
+            || rawPath.StartsWith("/ComfyBackendDirect/ExtensionFile/ComfyUIBackendExtension/Assets/viteui_studio.html", StringComparison.OrdinalIgnoreCase)
+            || rawPath.StartsWith("/ComfyBackendDirect/ExtensionFile/ComfyUIBackend/Assets/viteui_studio.html", StringComparison.OrdinalIgnoreCase))
+        {
+            if (rawPath.Contains("/assets/", StringComparison.OrdinalIgnoreCase))
+            {
+                string asset = rawPath.AfterLast('/');
+                string fileName = asset;
+                string contentType = asset.EndsWith(".css", StringComparison.OrdinalIgnoreCase) ? "text/css" : "text/javascript";
+                string filePath = Path.Combine(ComfyUIBackendExtension.Folder, "Assets", fileName);
+                if (!File.Exists(filePath))
+                {
+                    context.Response.StatusCode = 404;
+                    await context.Response.CompleteAsync();
+                    return;
+                }
+                context.Response.ContentType = contentType;
+                await context.Response.WriteAsync(File.ReadAllText(filePath));
+                await context.Response.CompleteAsync();
+                return;
+            }
+            string htmlPath = Path.Combine(ComfyUIBackendExtension.Folder, "Assets", "viteui_studio.html");
+            if (!File.Exists(htmlPath))
+            {
+                context.Response.StatusCode = 404;
+                await context.Response.CompleteAsync();
+                return;
+            }
+            context.Response.ContentType = "text/html";
+            await context.Response.WriteAsync(File.ReadAllText(htmlPath));
             await context.Response.CompleteAsync();
             return;
         }
