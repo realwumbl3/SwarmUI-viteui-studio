@@ -3,6 +3,7 @@ import { Sliders } from "lucide-react";
 import { cn } from "../lib/utils";
 import ResolutionPicker from "./ResolutionPicker";
 import NumberSelector from "./NumberSelector";
+import OptionPicker from "./OptionPicker";
 import type { GenerationMode } from "../types/components";
 
 const PropertiesPanel = ({
@@ -22,6 +23,8 @@ const PropertiesPanel = ({
     onImageUpload,
     saveImages,
     setSaveImages,
+    executionMode,
+    setExecutionMode,
 }: {
     collapsed: boolean
     onToggle: () => void
@@ -41,6 +44,8 @@ const PropertiesPanel = ({
     onClipSkipChange?: (value: number) => void
     saveImages: boolean
     setSaveImages: (value: boolean) => void
+    executionMode: 'direct' | 'nodes'
+    setExecutionMode: (mode: 'direct' | 'nodes') => void
 }
 ) => {
     const [activeSection, setActiveSection] = useState<string>("generation");
@@ -198,6 +203,23 @@ const PropertiesPanel = ({
                                             </div>
                                         </>
                                     )}
+
+                                    {/* Execution Mode */}
+                                    <div>
+                                        <label className="studio-label mb-1 block">Generator</label>
+                                        <OptionPicker
+                                            value={executionMode}
+                                            onChange={setExecutionMode}
+                                            options={[
+                                                { value: 'direct', label: 'Direct' },
+                                                { value: 'nodes', label: 'Nodes' }
+                                            ]}
+                                            placeholder="Select generator..."
+                                        />
+                                        <p className="text-xs text-studio-text-muted mt-1">
+                                            Direct: Use SwarmUI's native generation. Nodes: Use ComfyUI workflows.
+                                        </p>
+                                    </div>
 
                                     {/* Batch Size */}
                                     <div>

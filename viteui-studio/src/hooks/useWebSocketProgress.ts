@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useReducer } from 'react'
 import { API_BASE_URL } from '../lib/utils'
+import api from '../Api'
 
 export interface ProgressData {
   progress?: number
@@ -75,84 +76,88 @@ export class ProgressWebSocketManager {
     }
 
     // If already connected with the same taskId, don't reconnect
-    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.currentTaskId === taskId) {
+    if (this.pollingInterval && this.currentTaskId === taskId) {
       return
     }
 
-    // If connected with different taskId, disconnect first
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) && this.currentTaskId !== taskId) {
+    // Disconnect existing polling if different taskId
+    if (this.pollingInterval && this.currentTaskId !== taskId) {
       this.disconnect()
-    }
-
-    // If connecting to a different taskId, wait for current connection to close
-    if (this.ws && this.ws.readyState === WebSocket.CONNECTING && this.currentTaskId === taskId) {
-      return
     }
 
     this.currentTaskId = taskId
 
-    // Parse API base URL to construct WebSocket URL
-    const apiUrl = new URL(API_BASE_URL)
-    const protocol = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:'
-    const encodedTaskId = encodeURIComponent(taskId)
-    const wsUrl = `${protocol}//${apiUrl.host}/ws/viteapi/progress_socket?task_id=${encodedTaskId}`
-
-    try {
-      this.ws = new WebSocket(wsUrl)
-
-      this.ws.onopen = (): void => {
-        this.reconnectAttempts = 0
-        this.broadcast({ type: 'connected' })
-      }
-
-      this.ws.onmessage = (event: MessageEvent): void => {
-        try {
-          const data: WebSocketMessage = JSON.parse(event.data)
-          this.broadcast(data)
-        } catch (error) {
-          console.error('Failed to parse WebSocket message:', error)
-        }
-      }
-
-      this.ws.onclose = (event: CloseEvent): void => {
-        console.log('WebSocket disconnected, code:', event.code, 'reason:', event.reason, 'wasClean:', event.wasClean)
-        this.broadcast({ type: 'disconnected' })
-
-        // Attempt to reconnect if not intentionally closed
-        if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
-          this.reconnectAttempts++
-          setTimeout(() => {
-            console.log(`Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`)
-            this.connect(this.currentTaskId)
-          }, 1000 * this.reconnectAttempts)
-        }
-      }
-
-      this.ws.onerror = (error: Event): void => {
-        console.error('WebSocket error:', error)
-        console.error('WebSocket readyState:', this.ws?.readyState)
-        console.error('WebSocket URL:', this.ws?.url)
-      }
-
-    } catch (error) {
-      console.error('Failed to create WebSocket connection:', error)
+    // For SwarmUI integration, use polling instead of WebSocket
+    // Parse taskId to extract workspace ID (assuming format like "task(mode-timestamp-random)")
+    const workspaceMatch = taskId.match(/task\([^)]+-([^)]+)\)/)
+    if (!workspaceMatch) {
+      console.warn('Could not extract workspace ID from taskId:', taskId)
+      return
     }
+
+    const workspaceId = workspaceMatch[1]
+    this.workspaceId = workspaceId
+
+    // Start polling workspace status
+    this.startPolling()
+  }
+
+  private workspaceId: string | null = null
+  private pollingInterval: NodeJS.Timeout | null = null
+  private lastCandidateCount = 0
+
+  private startPolling(): void {
+    if (!this.workspaceId) return
+
+    this.broadcast({ type: 'connected' })
+
+    // Poll workspace status every 2 seconds
+    this.pollingInterval = setInterval(async () => {
+      try {
+        const workspaceData = await api.viteuiGetWorkspace(this.workspaceId!)
+
+        // Check if generation is active
+        if (workspaceData.active_generation_id) {
+          // Send fake progress updates (since we don't have real progress)
+          this.broadcast({
+            task_id: this.currentTaskId,
+            progress: 0.5, // Fake progress
+            textinfo: 'Generating...',
+            sampling_step: 1,
+            sampling_steps: 20
+          })
+        }
+
+        // Check for new candidates (indicating completion)
+        const currentCandidateCount = workspaceData.candidates?.length || 0
+        if (currentCandidateCount > this.lastCandidateCount) {
+          // New candidates appeared - generation completed
+          this.broadcast({
+            task_id: this.currentTaskId,
+            completed: true,
+            status: 'completed'
+          })
+          this.lastCandidateCount = currentCandidateCount
+        }
+
+      } catch (error) {
+        console.error('Failed to poll workspace status:', error)
+      }
+    }, 2000)
   }
 
   disconnect(): void {
-    if (this.ws) {
-      // Remove event handlers to prevent reconnection attempts
-      this.ws.onclose = null
-      this.ws.onerror = null
-      this.ws.close(1000, 'Client disconnecting')
-      this.ws = null
-      this.currentTaskId = null
-      this.reconnectAttempts = 0
-    } else {
-      // Ensure taskId is cleared even if no WebSocket exists
-      this.currentTaskId = null
-      this.reconnectAttempts = 0
+    // Stop polling
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval)
+      this.pollingInterval = null
     }
+
+    this.broadcast({ type: 'disconnected' })
+    this.currentTaskId = null
+    this.workspaceId = null
+    this.lastCandidateCount = 0
+    this.reconnectAttempts = 0
   }
 
   subscribe(listener: (data: WebSocketMessage) => void): () => void {
@@ -171,9 +176,8 @@ export class ProgressWebSocketManager {
   }
 
   ping(): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: 'ping' }))
-    }
+    // No-op for polling-based progress tracking
+    // Could potentially trigger a manual poll if needed
   }
 }
 

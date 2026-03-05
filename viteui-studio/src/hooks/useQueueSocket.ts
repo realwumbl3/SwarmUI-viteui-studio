@@ -28,13 +28,25 @@ export const useQueueSocket = () => {
     })
     const [isConnected, setIsConnected] = useState(false)
 
-    // TODO: Implement WebSocket connection for SwarmUI
-    // For now, return default status to prevent errors
+    // For SwarmUI integration, we don't use WebSocket for queue status
+    // Instead, we could poll GetCurrentStatus periodically if needed
     useEffect(() => {
         // WebSocket connection disabled for SwarmUI integration
-        // The ViteUI studio expects a different WebSocket API than SwarmUI provides
+        // Queue status could be polled from /API/GetCurrentStatus if needed
         console.log("QueueSocket: WebSocket connection disabled for SwarmUI compatibility")
         setIsConnected(false)
+
+        // Optional: Poll queue status periodically
+        // const pollQueueStatus = async () => {
+        //     try {
+        //         const response = await api.getQueueStatus()
+        //         setStatus(response)
+        //     } catch (error) {
+        //         console.warn("Failed to poll queue status:", error)
+        //     }
+        // }
+        // const interval = setInterval(pollQueueStatus, 5000)
+        // return () => clearInterval(interval)
     }, [])
 
     return { status, isConnected }

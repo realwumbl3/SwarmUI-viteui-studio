@@ -65,43 +65,26 @@ function buildWorkspaceUrl(workspace: string, path: string): string {
 // Resolve image source for full-size or preview images
 export function resolveImageSrc(value?: string | null, kind: "full" | "preview" = "full"): string | null {
   if (!value) return null
-  if (value.startsWith("data:") || value.startsWith("http")) return value
+
+  // Handle data URLs and HTTP URLs directly (including SwarmUI image URLs)
+  if (value.startsWith("data:") || value.startsWith("http") || value.startsWith("/")) return value
+
+  // For SwarmUI integration, the File property contains direct URLs
+  // But we still need to handle workspace:// URIs for backward compatibility
   const workspaceInfo = parseWorkspaceImage(value)
   if (!workspaceInfo) return value
 
-  // Extract category and genid from path
-  const pathParts = workspaceInfo.path.split('/')
-  if (pathParts.length >= 2 && ['candidates', 'commits', 'rejects'].includes(pathParts[0])) {
-    const category = pathParts[0]
-    const genid = pathParts[1]
-    const asset = kind === "preview" ? "512.webp" : "full.webp"
-
-    // Build path for new unified endpoint
-    const assetPath = `${category}/${genid}/${asset}`
-    return buildWorkspaceUrl(workspaceInfo.workspace, assetPath)
-  }
-
-  // Fallback to old structure (shouldn't happen with new code)
-  return buildWorkspaceUrl(workspaceInfo.workspace, workspaceInfo.path)
+  // For SwarmUI integration, we don't have the workspace-organized file structure
+  // The ViteUI candidates contain direct SwarmUI image URLs in the File property
+  // So we return the value as-is, assuming it's already a valid URL
+  return value
 }
 
 // Get metadata for a generation
 export function resolveMetaSrc(value?: string | null): string | null {
   if (!value) return null
-  const workspaceInfo = parseWorkspaceImage(value)
-  if (!workspaceInfo) return null
 
-  // Extract category and genid from path
-  const pathParts = workspaceInfo.path.split('/')
-  if (pathParts.length >= 2 && ['candidates', 'commits', 'rejects'].includes(pathParts[0])) {
-    const category = pathParts[0]
-    const genid = pathParts[1]
-
-    // Build path for new unified endpoint
-    const assetPath = `${category}/${genid}/meta.json`
-    return buildWorkspaceUrl(workspaceInfo.workspace, assetPath)
-  }
-
-  // Fallback to old structure (shouldn't happen with new code)
-  return buildWorkspaceUrl(workspaceInfo.workspace, workspaceInfo.path)
+  // For SwarmUI integration, metadata handling may be different
+  // For now, return null as we don't have metadata URLs in the same format
+  return null
 }

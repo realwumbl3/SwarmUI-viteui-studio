@@ -4,11 +4,12 @@ INT_MAX = 0xffffffffffffffff
 INT_MIN = -INT_MAX
 
 
-class SwarmViteUIController:
+class SwarmViteUIStudio:
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
+                "workspace_id": ("STRING", {"default": "", "multiline": False, "tooltip": "Workspace ID to open in ViteUI Studio."}),
                 "mode": (["txt2img", "img2img", "inpaint", "video"], {"default": "txt2img", "tooltip": "Generation mode for ViteUI."}),
                 "prompt": ("STRING", {"default": "", "multiline": True}),
                 "negative_prompt": ("STRING", {"default": "", "multiline": True}),
@@ -36,14 +37,15 @@ class SwarmViteUIController:
         }
 
     CATEGORY = "SwarmUI/viteui"
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("controller_json",)
-    FUNCTION = "build_state"
-    DESCRIPTION = "Builds a ViteUI controller JSON payload for use with the ViteUI studio node."
+    RETURN_TYPES = ()
+    FUNCTION = "studio"
+    OUTPUT_NODE = True
+    DESCRIPTION = "Opens the ViteUI Studio editor for the given workspace."
 
-    def build_state(self, mode, prompt, negative_prompt, model, sampler, scheduler, seed, steps, cfg, width, height,
-                    init_strength, video_model, video_swap_model, video_swap_percent, video_frames, video_fps, video_steps, video_format,
-                    init_image=None, mask_image=None):
+    def studio(self, workspace_id, mode, prompt, negative_prompt, model, sampler, scheduler, seed, steps, cfg, width, height,
+               init_strength, video_model, video_swap_model, video_swap_percent, video_frames, video_fps, video_steps, video_format,
+               init_image=None, mask_image=None):
+        _ = workspace_id
         def image_to_payload(image):
             if image is None:
                 return None
@@ -85,30 +87,6 @@ class SwarmViteUIController:
                 "format": video_format
             }
         }
-        return (json.dumps(state), )
-
-    @classmethod
-    def IS_CHANGED(s, **kwargs):
-        return time.time()
-
-
-class SwarmViteUIStudio:
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "workspace_id": ("STRING", {"default": "", "multiline": False, "tooltip": "Workspace ID to open in ViteUI Studio."}),
-                "controller": ("STRING", {"default": "{}", "multiline": True, "tooltip": "Optional controller JSON from SwarmViteUIController."}),
-            }
-        }
-
-    CATEGORY = "SwarmUI/viteui"
-    RETURN_TYPES = ()
-    FUNCTION = "studio"
-    OUTPUT_NODE = True
-    DESCRIPTION = "Opens the ViteUI Studio editor for the given workspace."
-
-    def studio(self, workspace_id, controller):
         return {}
 
     @classmethod
@@ -117,6 +95,5 @@ class SwarmViteUIStudio:
 
 
 NODE_CLASS_MAPPINGS = {
-    "SwarmViteUIController": SwarmViteUIController,
     "SwarmViteUIStudio": SwarmViteUIStudio,
 }

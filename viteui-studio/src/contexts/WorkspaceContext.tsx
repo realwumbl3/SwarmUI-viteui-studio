@@ -25,6 +25,7 @@ export interface WorkspaceGenerationState {
     currentTaskId: string | null;
     pendingRestart: boolean;
     composingPartial: boolean;
+    executionMode: 'direct' | 'nodes';
     seed?: number;
 }
 
@@ -123,6 +124,7 @@ const createDefaultWorkspaceState = (): WorkspaceState => ({
         currentTaskId: null,
         pendingRestart: false,
         composingPartial: false,
+        executionMode: 'direct',
     },
     mode: {
         generationMode: "txt2img",
@@ -201,6 +203,7 @@ const stripTransientState = (state: WorkspaceState): WorkspaceState => ({
         pendingRestart: false,
         currentTaskId: null,
         composingPartial: false,
+        // executionMode is persistent, not transient
     },
     mode: {
         ...state.mode,

@@ -7,6 +7,25 @@ import { useTitleIconAnimation } from "./hooks/useTitleIconAnimation";
 import { useWorkspaceContext, useWorkspaceState } from "./contexts/WorkspaceContext";
 import PasteImageDialog from "./components/PasteImageDialog";
 
+const CONTROLLER_BOOTSTRAP_PREFIX = "viteui-controller-bootstrap";
+
+const storeControllerBootstrap = (workspaceId: string, controller: unknown): boolean => {
+    if (!workspaceId || controller == null) {
+        return false;
+    }
+    try {
+        const payload = typeof controller === "string" ? controller : JSON.stringify(controller);
+        if (!payload) {
+            return false;
+        }
+        sessionStorage.setItem(`${CONTROLLER_BOOTSTRAP_PREFIX}-${workspaceId}`, payload);
+        return true;
+    } catch (error) {
+        console.warn("Failed to store ViteUI bootstrap controller:", error);
+        return false;
+    }
+};
+
 function App() {
     const {
         openWorkspaces,
@@ -106,6 +125,40 @@ function App() {
             void initializeWorkspace();
         }
     }, [currentWorkspace, initializeWorkspace, openWorkspaces.length]);
+
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const workspaceId = params.get("workspace_id");
+        if (!workspaceId) return;
+
+        openWorkspace(workspaceId);
+
+        const controller = params.get("controller");
+        if (controller) {
+            storeControllerBootstrap(workspaceId, controller);
+        }
+    }, [openWorkspace]);
+
+    useEffect(() => {
+        const onMessage = (event: MessageEvent): void => {
+            const data = event.data;
+            if (!data || typeof data !== "object") return;
+
+            const messageType = data.type === "swarm_viteui_open" || data.type === "swarm_viteui_init" ? data.type : null;
+            if (!messageType) return;
+
+            const workspaceId = data.workspace_id ?? data.workspace;
+            if (!workspaceId || typeof workspaceId !== "string") return;
+
+            if (data.controller) {
+                storeControllerBootstrap(workspaceId, data.controller);
+            }
+            openWorkspace(workspaceId);
+        };
+
+        window.addEventListener("message", onMessage);
+        return () => window.removeEventListener("message", onMessage);
+    }, [openWorkspace]);
 
     const cachedWorkspaceIds = useMemo(() => {
         return recentWorkspaceIds.filter((id) => openWorkspaces.includes(id));

@@ -183,16 +183,105 @@ import { API_BASE_URL as BASE_URL } from './lib/utils';
 
 
 class StableDiffusionAPI {
-  constructor(private baseUrl: string = `${BASE_URL}/api`) { }
+  private sessionInitPromise: Promise<string | null> | null = null;
 
-  async request<T = unknown>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const url = `${this.baseUrl}${endpoint}`;
+  private getCookie(name: string): string | null {
+    if (typeof document === "undefined") return null;
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) {
+      return parts.pop()?.split(';').shift() ?? null;
+    }
+    return null;
+  }
+
+  private setCookie(name: string, value: string): void {
+    if (typeof document === "undefined") return;
+    const expires = new Date();
+    expires.setDate(expires.getDate() + 31);
+    document.cookie = `${name}=${value}; path=/; expires=${expires.toUTCString()}`;
+  }
+
+  private async ensureSessionId(): Promise<string | null> {
+    const existing = this.getCookie('session_id');
+    if (existing) return existing;
+    if (this.sessionInitPromise) {
+      return this.sessionInitPromise;
+    }
+
+    this.sessionInitPromise = (async () => {
+      try {
+        const response = await fetch(`${this.baseUrl}/GetNewSession`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({}),
+        });
+        if (!response.ok) return null;
+        const data = await response.json();
+        const sessionId = data?.session_id;
+        if (typeof sessionId === 'string' && sessionId.length > 0) {
+          this.setCookie('session_id', sessionId);
+          return sessionId;
+        }
+      } catch {
+      }
+      return null;
+    })();
+
+    const sessionId = await this.sessionInitPromise;
+    this.sessionInitPromise = null;
+    return sessionId;
+  }
+
+  constructor(private baseUrl: string = `${BASE_URL || '/API'}`) { }
+
+  async request<T = unknown>(endpoint: string, options: RequestInit = {}, retriedForSession = false): Promise<T> {
+    const normalizedBase = this.baseUrl.replace(/\/+$/g, '');
+    const endpointWithSlash = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+    const hasApiBase = normalizedBase.toLowerCase().endsWith('/api');
+
+    let normalizedEndpoint = endpointWithSlash.replace(/\/+$/, '');
+    if (hasApiBase) {
+      normalizedEndpoint = normalizedEndpoint.replace(/^\/api\//i, '/');
+      normalizedEndpoint = normalizedEndpoint.replace(/^\/+/, '/');
+    }
+    else {
+      if (!/^\/api\//i.test(normalizedEndpoint)) {
+        normalizedEndpoint = `/API${normalizedEndpoint}`;
+      }
+      normalizedEndpoint = normalizedEndpoint.replace(/^\/+api\//i, '/API/');
+    }
+
+    const url = `${normalizedBase || ''}${normalizedEndpoint || '/'}`;
+
+    const sessionId = await this.ensureSessionId();
+
+    // Prepare request body
+    let requestBody = options.body;
+    if (typeof requestBody === 'string') {
+      try {
+        const parsed = JSON.parse(requestBody);
+        if (sessionId) {
+          parsed.session_id = sessionId;
+        }
+        requestBody = JSON.stringify(parsed);
+      } catch (e) {
+        // If body is not valid JSON, leave it as is
+      }
+    } else if (!requestBody && sessionId) {
+      // If no body provided but we have session_id, create one
+      requestBody = JSON.stringify({ session_id: sessionId });
+    }
+
     const config: RequestInit = {
       headers: {
         'Content-Type': 'application/json',
         ...options.headers,
       },
+      credentials: 'include',
       ...options,
+      body: requestBody,
     };
 
     try {
@@ -200,13 +289,28 @@ class StableDiffusionAPI {
 
       if (!response.ok) {
         let detail = '';
+        let isSessionError = false;
         try {
-          const errorPayload = await response.json();
-          if (typeof errorPayload?.detail === 'string') {
-            detail = errorPayload.detail;
+          const parsedError = await response.json();
+          if (typeof parsedError?.detail === 'string') {
+            detail = parsedError.detail;
+          }
+          if (typeof parsedError?.error === 'string') {
+            detail = detail || parsedError.error;
+            isSessionError = /session/i.test(parsedError.error);
+          }
+          if (typeof parsedError?.error_id === 'string' && /session/i.test(parsedError.error_id)) {
+            isSessionError = true;
           }
         } catch {
           // Keep fallback status text if body is not JSON.
+        }
+
+        if (!retriedForSession && isSessionError) {
+          const refreshedSession = await this.ensureSessionId();
+          if (refreshedSession) {
+            return this.request(endpoint, options, true);
+          }
         }
 
         const suffix = detail ? ` - ${detail}` : '';
@@ -221,55 +325,92 @@ class StableDiffusionAPI {
   }
 
 
-  /** Queue txt2img. Returns immediately with task_id. Completion via WebSocket. */
-  async txt2img(params: Txt2ImgParams): Promise<GenerationQueuedResponse> {
-    const taskId = params.force_task_id ?? `task(txt2img-${Date.now()}-${Math.random().toString(36).substr(2, 9)})`
-    const paramsWithTaskId = { ...params, force_task_id: taskId }
-
-    const result = await this.request<{ task_id: string; status: string }>('/viteapi/txt2img', {
+  /** Get workspace data from SwarmUI ViteUI endpoint. */
+  async viteuiGetWorkspace(workspaceId?: string): Promise<{
+    workspace_id: string;
+    controller_state: string;
+    candidates: any[];
+    accepted: any[];
+    rejected: any[];
+    generations: any[];
+    videos: any[];
+    timelapses: any[];
+    active_generation_id: string | null;
+  }> {
+    return this.request('/API/ViteUIGetWorkspace', {
       method: 'POST',
-      body: JSON.stringify(paramsWithTaskId),
+      body: JSON.stringify({ workspace_id: workspaceId || null }),
     })
-
-    return { task_id: result.task_id, status: 'queued', taskId }
   }
 
-  /** Queue img2img. Returns immediately with task_id. Completion via WebSocket. */
-  async img2img(params: Img2ImgParams): Promise<GenerationQueuedResponse> {
-    const taskId = params.force_task_id ?? `task(img2img-${Date.now()}-${Math.random().toString(36).substr(2, 9)})`
-    const paramsWithTaskId = { ...params, force_task_id: taskId }
-
-    const result = await this.request<{ task_id: string; status: string }>('/viteapi/img2img', {
+  /** Save controller state to SwarmUI ViteUI endpoint. */
+  async viteuiSaveControllerState(workspaceId: string, controllerState: string): Promise<{ success: boolean; workspace_id: string }> {
+    return this.request('/API/ViteUISaveControllerState', {
       method: 'POST',
-      body: JSON.stringify(paramsWithTaskId),
+      body: JSON.stringify({
+        workspace_id: workspaceId,
+        controller_state: controllerState
+      }),
     })
+  }
 
-    return { task_id: result.task_id, status: 'queued', taskId }
+  /** Generate using SwarmUI ViteUI endpoint. */
+  async viteuiGenerate(workspaceId: string, controllerState: string, images: number = 1, executionMode: 'direct' | 'nodes' = 'direct'): Promise<{ workspace_id: string; generation_id: string; candidates: any[] }> {
+    const execution_mode = executionMode === 'direct' ? 'internal' : 'comfy_controller';
+    return this.request('/API/ViteUIGenerate', {
+      method: 'POST',
+      body: JSON.stringify({
+        workspace_id: workspaceId,
+        controller_state: controllerState,
+        execution_mode: execution_mode,
+        images: images
+      }),
+    })
   }
 
   // Get available models
   async getModels(): Promise<ModelInfo[]> {
-    return this.request<ModelInfo[]>('/viteapi/sd-models');
+    const response = await this.request<{ models: { checkpoints: Array<{ title: string; model_name: string; hash: string; sha256: string; filename: string; config: string | null }> } }>('/API/ListModels', {
+      method: 'POST',
+      body: JSON.stringify({ path: "", depth: 1, subtype: "checkpoints" }),
+    });
+
+    return response.models.checkpoints.map(model => ({
+      title: model.title,
+      model_name: model.model_name,
+      hash: model.hash,
+      sha256: model.sha256,
+      filename: model.filename,
+      config: model.config
+    }));
   }
 
-  // Get hierarchical models
+  // Get hierarchical models (SwarmUI format)
   async getViteModels(): Promise<ModelItem[]> {
-    try {
-      return this.request<ModelItem[]>('/viteapi/models');
-    } catch (e) {
-      console.warn("Vite models endpoint failed, falling back to legacy.", e);
-      return [];
-    }
+    // For now, return empty array as SwarmUI has different model organization
+    // This can be enhanced later to convert SwarmUI format to ViteUI format
+    return [];
   }
 
-  // Get available modules (VAE/Text Encoder)
+  // Get available modules (VAE/Text Encoder) from SwarmUI
   async getModules(): Promise<ModuleInfo[]> {
-    return this.request<ModuleInfo[]>('/viteapi/sd-modules');
+    const vaeResponse = await this.request<{ models: { vae: Array<{ title: string; model_name: string; hash: string; sha256: string; filename: string }> } }>('/API/ListModels', {
+      method: 'POST',
+      body: JSON.stringify({ path: "", depth: 1, subtype: "vae" }),
+    });
+
+    return vaeResponse.models.vae.map(model => ({
+      model_name: model.model_name,
+      filename: model.filename
+    }));
   }
 
   async getQueueStatus(): Promise<any> {
     try {
-      const res = await this.request('/API/GetCurrentStatus')
+      const res = await this.request('/API/GetCurrentStatus', {
+        method: 'POST',
+        body: JSON.stringify({})
+      })
       // Return queue status based on SwarmUI status
       return {
         queue: [],
@@ -289,7 +430,10 @@ class StableDiffusionAPI {
   // Get current options
   async getOptions(): Promise<any> {
     try {
-      const res = await this.request('/API/GetCurrentStatus')
+      const res = await this.request('/API/GetCurrentStatus', {
+        method: 'POST',
+        body: JSON.stringify({})
+      })
       // Return minimal options structure for SwarmUI compatibility
       return {
         sd_model_checkpoint: "None",
@@ -346,14 +490,65 @@ class StableDiffusionAPI {
     });
   }
 
-  // Get samplers
+  // Get samplers from SwarmUI T2I params
   async getSamplers(): Promise<SamplerInfo[]> {
-    return this.request<SamplerInfo[]>('/viteapi/samplers');
+    const paramsData = await this.request<{ list: any[] }>('/API/ListT2IParams', {
+      method: 'POST',
+      body: JSON.stringify({})
+    });
+
+    // Find sampler parameter and extract its values
+    const samplerParam = paramsData.list.find((param: any) => param.id === 'sampler');
+    if (!samplerParam) {
+      return [];
+    }
+
+    // Convert SwarmUI format to ViteUI format
+    return samplerParam.values.map((value: any) => ({
+      name: value,
+      aliases: [value],
+      options: {}
+    }));
   }
 
-  // Get upscalers
+  // Get upscalers from SwarmUI T2I params
   async getUpscalers(): Promise<UpscalerInfo[]> {
-    return this.request<UpscalerInfo[]>('/viteapi/upscalers');
+    const paramsData = await this.request<{ list: any[] }>('/API/ListT2IParams', {
+      method: 'POST',
+      body: JSON.stringify({})
+    });
+
+    // Find upscaler parameters and extract their values
+    const upscaler1Param = paramsData.list.find((param: any) => param.id === 'upscaler1');
+    const upscaler2Param = paramsData.list.find((param: any) => param.id === 'upscaler2');
+
+    const upscalers: UpscalerInfo[] = [];
+
+    // Extract from upscaler1
+    if (upscaler1Param?.values) {
+      upscaler1Param.values.forEach((value: string) => {
+        if (value && value !== "None") {
+          upscalers.push({
+            name: value,
+            scale: 2 // Default scale, could be enhanced to get actual scale
+          });
+        }
+      });
+    }
+
+    // Extract from upscaler2
+    if (upscaler2Param?.values) {
+      upscaler2Param.values.forEach((value: string) => {
+        if (value && value !== "None" && !upscalers.some(u => u.name === value)) {
+          upscalers.push({
+            name: value,
+            scale: 2 // Default scale, could be enhanced to get actual scale
+          });
+        }
+      });
+    }
+
+    return upscalers;
   }
 
   /** Queue extras (upscale). Returns immediately with task_id. Completion via WebSocket. */
@@ -405,140 +600,181 @@ class StableDiffusionAPI {
     });
   }
 
-  // Workspace APIs
+  // Workspace APIs - using SwarmUI ViteUI endpoints
   async listWorkspaces(): Promise<{ workspaces: WorkspaceInfo[] }> {
-    return this.request<{ workspaces: WorkspaceInfo[] }>('/workspaces');
+    // Note: SwarmUI doesn't have a direct workspace listing endpoint
+    // This could be implemented by scanning the viteui_workspaces directory
+    // For now, return empty list
+    return { workspaces: [] };
   }
 
   async createWorkspace(name: string): Promise<{ success: boolean; name: string; message?: string }> {
-    return this.request('/workspaces', {
+    // Create workspace by calling ViteUIGetWorkspace with a new workspace ID
+    // The backend will create it if it doesn't exist
+    const workspaceId = name.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const result = await this.request('/API/ViteUIGetWorkspace', {
       method: 'POST',
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ workspace_id: workspaceId }),
     });
+    return { success: true, name: workspaceId };
   }
 
   async getWorkspaceStructure(): Promise<{ structure: WorkspaceStructureNode }> {
-    return this.request<{ structure: WorkspaceStructureNode }>('/workspaces/structure');
+    // Note: This endpoint doesn't exist in SwarmUI ViteUI
+    // Return minimal structure
+    return {
+      structure: {
+        path: "workspaces",
+        name: "workspaces",
+        type: "folder",
+        children: []
+      }
+    };
   }
 
   async createWorkspaceFolder(path: string): Promise<{ success: boolean; path: string; message?: string }> {
-    return this.request('/workspaces/folders', {
-      method: 'POST',
-      body: JSON.stringify({ path }),
-    });
+    // Note: SwarmUI ViteUI doesn't have folder management
+    return { success: false, path, message: "Folder management not supported" };
   }
 
   async getWorkspacePrompt(workspaceName: string): Promise<WorkspacePrompt> {
-    return this.request<WorkspacePrompt>(`/workspaces/${encodeURIComponent(workspaceName)}/prompt`);
+    // Get workspace data and extract prompt if available
+    const result = await this.request('/API/ViteUIGetWorkspace', {
+      method: 'POST',
+      body: JSON.stringify({ workspace_id: workspaceName }),
+    });
+
+    // For now, return empty prompt structure
+    // This could be enhanced to store prompts in controller_state
+    return { nodes: [] };
   }
 
   async saveWorkspacePrompt(workspaceName: string, promptData: WorkspacePrompt): Promise<WorkspacePrompt> {
-    return this.request<WorkspacePrompt>(`/workspaces/${encodeURIComponent(workspaceName)}/prompt`, {
-      method: 'POST',
-      body: JSON.stringify(promptData),
-    });
+    // Note: SwarmUI ViteUI doesn't have separate prompt storage
+    // Prompts are stored in controller state
+    return promptData;
   }
 
   async importWorkspaceImage(workspaceName: string, imageBase64: string): Promise<{ success: boolean; image_path: string }> {
-    return this.request(`/workspaces/${encodeURIComponent(workspaceName)}/import`, {
-      method: 'POST',
-      body: JSON.stringify({ image_base64: imageBase64 }),
-    });
+    // Note: This functionality would need to be implemented differently in SwarmUI
+    return { success: false, image_path: "" };
   }
 
   async commitWorkspaceImage(workspaceName: string, imagePath: string): Promise<{ success: boolean; commit_path: string }> {
-    return this.request(`/workspaces/${encodeURIComponent(workspaceName)}/commit`, {
+    return this.request('/API/ViteUIAcceptCandidate', {
       method: 'POST',
-      body: JSON.stringify({ image_path: imagePath }),
+      body: JSON.stringify({ workspace_id: workspaceName, candidate_id: imagePath }),
     });
   }
 
   async rejectWorkspaceImage(workspaceName: string, imagePath: string): Promise<{ success: boolean; reject_path: string }> {
-    return this.request(`/workspaces/${encodeURIComponent(workspaceName)}/reject`, {
+    return this.request('/API/ViteUIRejectCandidate', {
       method: 'POST',
-      body: JSON.stringify({ image_path: imagePath }),
+      body: JSON.stringify({ workspace_id: workspaceName, candidate_id: imagePath }),
     });
   }
 
   async restoreWorkspaceImage(workspaceName: string, imagePath: string): Promise<{ success: boolean; restore_path: string }> {
-    return this.request(`/workspaces/${encodeURIComponent(workspaceName)}/restore`, {
-      method: 'POST',
-      body: JSON.stringify({ image_path: imagePath }),
-    });
+    // Note: Restore functionality not directly supported in SwarmUI ViteUI
+    return { success: false, restore_path: "" };
   }
 
   async uncommitWorkspaceImage(workspaceName: string, imagePath: string): Promise<{ success: boolean; uncommit_path: string }> {
-    return this.request(`/workspaces/${encodeURIComponent(workspaceName)}/uncommit`, {
-      method: 'POST',
-      body: JSON.stringify({ image_path: imagePath }),
-    });
+    // Note: Uncommit functionality not directly supported in SwarmUI ViteUI
+    return { success: false, uncommit_path: "" };
   }
 
   async deleteWorkspaceImage(workspaceName: string, imagePath: string): Promise<{ success: boolean; delete_path: string }> {
-    return this.request(`/workspaces/${encodeURIComponent(workspaceName)}/delete`, {
-      method: 'POST',
-      body: JSON.stringify({ image_path: imagePath }),
-    });
+    // Note: Delete functionality not directly supported in SwarmUI ViteUI
+    return { success: false, delete_path: "" };
   }
 
   async openWorkspaceImageInMspaint(workspaceName: string, path: string): Promise<{ success: boolean; path: string }> {
-    return this.request(`/workspaces/${encodeURIComponent(workspaceName)}/open-mspaint`, {
-      method: 'POST',
-      body: JSON.stringify({ path }),
-    });
+    // Note: External editor functionality not supported in SwarmUI ViteUI
+    return { success: false, path };
   }
 
   async revealWorkspacePath(workspaceName: string, path: string, createPng: boolean = false): Promise<{ success: boolean; path: string }> {
-    return this.request(`/workspaces/${encodeURIComponent(workspaceName)}/reveal`, {
-      method: 'POST',
-      body: JSON.stringify({ path, create_png: createPng }),
-    });
+    // Note: File system reveal functionality not supported in SwarmUI ViteUI
+    return { success: false, path };
   }
 
   async refreshGenerationFromSource(workspaceName: string, path: string): Promise<{ success: boolean; path: string }> {
-    return this.request(`/workspaces/${encodeURIComponent(workspaceName)}/refresh-from-source`, {
-      method: 'POST',
-      body: JSON.stringify({ path }),
-    });
+    // Note: Refresh functionality not supported in SwarmUI ViteUI
+    return { success: false, path };
   }
 
   // Get generation asset (meta.json, full.webp, 512.webp)
   async getGenerationAsset(workspaceName: string, category: string, genid: string, asset: string): Promise<unknown> {
-    const url = `/workspaces/${encodeURIComponent(workspaceName)}/${category}/${genid}/${asset}`;
-    if (asset.endsWith('.json')) {
-      return this.request(url);
-    } else {
-      // For binary assets like images, return the raw response
-      const token = getAuthToken();
-      const response = await fetch(`${this.baseUrl}${url}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to fetch asset: ${response.status} ${response.statusText}`);
-      }
-      return response;
-    }
+    // Note: Asset fetching would need to be implemented differently
+    // For now, return null
+    return null;
   }
 
   // Get generations for a workspace
   async getGenerations(workspaceName: string): Promise<Generation[]> {
-    return this.request<Generation[]>(`/workspaces/${encodeURIComponent(workspaceName)}/generations`);
+    const result = await this.request('/API/ViteUIGetWorkspace', {
+      method: 'POST',
+      body: JSON.stringify({ workspace_id: workspaceName }),
+    });
+
+    // Convert SwarmUI format to ViteUI format
+    const generations: Generation[] = [];
+
+    // Add generations from workspace data
+    if (result.generations) {
+      result.generations.forEach((gen: any) => {
+        generations.push({
+          genid: gen.Id,
+          status: 'commit', // Assume committed
+          timestamp: gen.Created,
+          source: gen.Mode || 'txt2img',
+          prompt: gen.ControllerState ? JSON.parse(gen.ControllerState).prompt : undefined,
+          negativePrompt: gen.ControllerState ? JSON.parse(gen.ControllerState).negative_prompt : undefined,
+          workspace: workspaceName,
+          parameters: gen.ControllerState ? JSON.parse(gen.ControllerState) : undefined
+        });
+      });
+    }
+
+    // Add candidates and accepted images
+    if (result.candidates) {
+      result.candidates.forEach((candidate: any) => {
+        generations.push({
+          genid: candidate.Id,
+          status: 'candidate',
+          timestamp: candidate.Created,
+          source: candidate.Mode || 'txt2img',
+          workspace: workspaceName,
+          image: candidate.File
+        });
+      });
+    }
+
+    if (result.accepted) {
+      result.accepted.forEach((accepted: any) => {
+        generations.push({
+          genid: accepted.Id,
+          status: 'commit',
+          timestamp: accepted.Created,
+          source: accepted.Mode || 'txt2img',
+          workspace: workspaceName,
+          image: accepted.File
+        });
+      });
+    }
+
+    return generations;
   }
 
-  // Move workspace or folder
+  // Move workspace or folder (not supported in SwarmUI ViteUI)
   async moveWorkspaceItem(sourcePath: string, destinationPath: string): Promise<{ success: boolean; source_path: string; destination_path: string }> {
-    return this.request(`/workspaces/move`, {
-      method: 'POST',
-      body: JSON.stringify({ source_path: sourcePath, destination_path: destinationPath }),
-    });
+    return { success: false, source_path: sourcePath, destination_path: destinationPath };
   }
 
-  // Rename workspace or folder
+  // Rename workspace or folder (not supported in SwarmUI ViteUI)
   async renameWorkspaceItem(itemPath: string, newName: string): Promise<{ success: boolean; old_path: string; new_path: string }> {
-    return this.request(`/workspaces/rename`, {
-      method: 'POST',
-      body: JSON.stringify({ item_path: itemPath, new_name: newName }),
-    });
+    return { success: false, old_path: itemPath, new_path: itemPath };
   }
 
 }

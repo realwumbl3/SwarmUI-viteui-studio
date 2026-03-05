@@ -5,12 +5,13 @@ import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import Sidebar from "./Sidebar";
 import InpaintCanvas from "./InpaintCanvas/components/InpaintCanvas";
 import SettingsSidebar from "./SettingsSidebar";
+import PropertiesPanel from "./PropertiesPanel";
 import { CanvasSyncProvider } from "../contexts/CanvasSyncContext";
 import { useWorkspaceContext, useWorkspaceState } from "../contexts/WorkspaceContext";
 import UpscaleDialog from "./UpscaleDialog";
 import { parseWorkspaceImage, resolveImageSrc, API_BASE_URL } from "../lib/utils";
 import { composePromptsFromNodes } from "./PromptComposer/utils/promptUtils";
-import { encodeLegacy } from "./PromptComposer/utils/legacyEncoding";
+import { decodeLegacy, encodeLegacy } from "./PromptComposer/utils/legacyEncoding";
 import { useWebSocketProgress } from "../hooks/useWebSocketProgress";
 import type { Generation, ExtrasSingleImageParams } from "../Api";
 import type { PromptMode, PromptNode, TagsNode } from "./PromptComposer/types";
@@ -19,6 +20,140 @@ import type { CanvasBounds, GenerationMode } from "../types/components";
 import type { ProgressData } from "../hooks/useWebSocketProgress";
 import type { Timeline } from "./TimelineItem";
 import clingSound from "../assets/cling.mp3";
+
+const CONTROLLER_BOOTSTRAP_PREFIX = "viteui-controller-bootstrap";
+
+type StudioControllerState = {
+    mode?: GenerationMode;
+    prompt?: string;
+    negative_prompt?: string;
+    model?: string;
+    sampler?: string;
+    scheduler?: string;
+    seed?: number | null;
+    steps?: number;
+    cfg?: number;
+    width?: number;
+    height?: number;
+    init_strength?: number | null;
+    init_image?: string | null;
+    mask_image?: string | null;
+    video?: {
+        model?: string;
+        swap_model?: string;
+        swap_percent?: number | null;
+        frames?: number | null;
+        fps?: number | null;
+        steps?: number | null;
+        format?: string | null;
+    };
+};
+
+const getControllerBootstrap = (workspaceId: string): string | null => {
+    if (!workspaceId || typeof sessionStorage === "undefined") return null;
+    const key = `${CONTROLLER_BOOTSTRAP_PREFIX}-${workspaceId}`;
+    try {
+        const raw = sessionStorage.getItem(key);
+        if (raw) {
+            sessionStorage.removeItem(key);
+        }
+        return raw;
+    } catch (error) {
+        console.warn("Failed to read bootstrap controller state:", error);
+        return null;
+    }
+};
+
+const parseControllerState = (value: unknown): StudioControllerState | null => {
+    if (!value) return null;
+    if (typeof value === "string") {
+        try {
+            const parsed = JSON.parse(value);
+            if (parsed && typeof parsed === "object") {
+                return parsed as StudioControllerState;
+            }
+        } catch (error) {
+            return null;
+        }
+    }
+    if (typeof value === "object") {
+        return value as StudioControllerState;
+    }
+    return null;
+};
+
+const getSafeNumber = (value: unknown, fallback: number): number => {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return fallback;
+};
+
+const getSafeInt = (value: unknown, fallback: number): number => {
+    const parsed = getSafeNumber(value, fallback);
+    return Number.isInteger(parsed) ? parsed : Math.round(parsed);
+};
+
+const parseWorkspaceNodesFromPrompt = (prompt: string, negativePrompt: string): PromptNode[] => {
+    if (prompt) {
+        const markerMatch = prompt.match(/<betterpromptexport:([^>]+)>/i);
+        if (markerMatch?.[1]) {
+            try {
+                const parsed = decodeLegacy(markerMatch[1]);
+                if (Array.isArray(parsed)) {
+                    return parsed as PromptNode[];
+                }
+            } catch (error) {
+                console.warn("Failed to decode better prompt metadata:", error);
+            }
+        }
+
+        try {
+            const parsed = decodeLegacy(prompt);
+            if (Array.isArray(parsed)) {
+                return parsed as PromptNode[];
+            }
+        } catch {
+            // fallback below
+        }
+    }
+
+    const nodes: PromptNode[] = [];
+    if (prompt?.trim()) {
+        nodes.push({
+            id: generateId(),
+            type: "text",
+            name: "Prompt",
+            hidden: false,
+            weight: 1,
+            value: prompt.trim(),
+            mode: "simple-positive",
+        });
+    }
+
+    if (negativePrompt?.trim()) {
+        nodes.push({
+            id: generateId(),
+            type: "text",
+            name: "Negative Prompt",
+            hidden: false,
+            weight: 1,
+            value: negativePrompt.trim(),
+            mode: "simple-negative",
+        });
+    }
+
+    return nodes;
+};
+
+const normalizeGenerationMode = (mode: unknown): GenerationMode => {
+    if (mode === "img2img" || mode === "inpaint" || mode === "video") {
+        return mode;
+    }
+    return "txt2img";
+};
 
 const Workspace = ({ workspaceId, isActive }: {
     workspaceId: string;
@@ -251,8 +386,42 @@ const Workspace = ({ workspaceId, isActive }: {
 
         let nodes: PromptNode[] = [];
         try {
-            const workspacePrompt = await api.getWorkspacePrompt(workspaceId);
-            nodes = workspacePrompt.nodes || [];
+            const bootstrapPayload = getControllerBootstrap(workspaceId);
+            const controllerState = parseControllerState(bootstrapPayload || (await api.viteuiGetWorkspace(workspaceId)).controller_state);
+
+            if (controllerState) {
+                const mode = normalizeGenerationMode(controllerState.mode);
+                const prompt = controllerState.prompt || "";
+                const negativePrompt = controllerState.negative_prompt || "";
+                const nextGenerationState: Partial<typeof generation> = {
+                    selectedModel: controllerState.model || generation.selectedModel,
+                    selectedSampler: controllerState.sampler || generation.selectedSampler,
+                    steps: getSafeInt(controllerState.steps, generation.steps),
+                    cfgScale: getSafeNumber(controllerState.cfg, generation.cfgScale),
+                    width: getSafeInt(controllerState.width, generation.width),
+                    height: getSafeInt(controllerState.height, generation.height),
+                    inputImage: mode === "img2img" || mode === "inpaint"
+                        ? (controllerState.init_image || null)
+                        : null,
+                    seed: typeof controllerState.seed === "number" ? controllerState.seed : generation.seed,
+                    denoisingStrength: mode === "img2img" || mode === "inpaint"
+                        ? getSafeNumber(controllerState.init_strength, generation.denoisingStrength)
+                        : generation.denoisingStrength,
+                };
+                if (Object.keys(nextGenerationState).length > 0) {
+                    setGenerationState(nextGenerationState);
+                }
+                setModeState({
+                    generationMode: mode,
+                    inpaintMask: mode === "inpaint" ? (controllerState.mask_image || null) : null,
+                    inpaintMaskSnapshot: null,
+                    generationBounds: null,
+                });
+                nodes = parseWorkspaceNodesFromPrompt(prompt, negativePrompt);
+            } else {
+                const workspacePrompt = await api.getWorkspacePrompt(workspaceId);
+                nodes = workspacePrompt.nodes || [];
+            }
 
             if (nodes.length === 0) {
                 const defaultTagNode: TagsNode = {
@@ -273,7 +442,20 @@ const Workspace = ({ workspaceId, isActive }: {
         } finally {
             setComposerNodes(nodes);
         }
-    }, [workspaceId]);
+    }, [
+        api,
+        generation.cfgScale,
+        generation.denoisingStrength,
+        generation.height,
+        generation.inputImage,
+        generation.selectedModel,
+        generation.selectedSampler,
+        generation.steps,
+        generation.width,
+        setGenerationState,
+        setModeState,
+        workspaceId,
+    ]);
 
     const maskSnapshotProviderRef = useRef<(() => string | null) | null>(null);
     const boundsProviderRef = useRef<(() => CanvasBounds) | null>(null);
@@ -396,49 +578,35 @@ const Workspace = ({ workspaceId, isActive }: {
                 }
             }
 
-            const baseParams = {
+            // Build ViteUIControllerState JSON structure
+            const controllerState = {
+                mode: mode.generationMode,
                 prompt: promptWithMetadata,
                 negative_prompt: composerNegativePrompt,
+                model: generation.selectedModel || "",
+                sampler: generation.selectedSampler,
+                scheduler: "", // Not used in current ViteUI
+                seed: generation.seed || null,
                 steps: generation.steps,
+                cfg: generation.cfgScale,
                 width: generation.width,
                 height: generation.height,
-                cfg_scale: generation.cfgScale,
-                sampler_name: generation.selectedSampler,
-                batch_size: generation.batchSize,
-                n_iter: generation.count,
-                clip_skip: generation.clipSkip,
-                save_images: generation.saveImages,
-                force_task_id: taskId,
-                workspace_name: workspaceId,
+                init_strength: mode.generationMode === "img2img" || mode.generationMode === "inpaint" ? generation.denoisingStrength : null,
+                init_image: mode.generationMode === "img2img" || mode.generationMode === "inpaint" ? generation.inputImage : null,
+                mask_image: mode.generationMode === "inpaint" ? mode.inpaintMask : null,
+                video: {
+                    model: "",
+                    swap_model: "",
+                    swap_percent: null,
+                    frames: null,
+                    fps: null,
+                    steps: null,
+                    format: ""
+                }
             };
 
-            if (mode.generationMode === "img2img") {
-                const img2imgParams = {
-                    ...baseParams,
-                    genid: timeline.committedHistory[0].genid,
-                    source_genid: timeline.committedHistory[0].genid,
-                    denoising_strength: generation.denoisingStrength,
-                };
-                await api.img2img(img2imgParams);
-            } else if (mode.generationMode === "inpaint") {
-                const maskBase64Data = mode.inpaintMask!.split(",")[1];
-                const inpaintParams = {
-                    ...baseParams,
-                    genid: timeline.committedHistory[0].genid,
-                    source_genid: timeline.committedHistory[0].genid,
-                    mask: maskBase64Data,
-                    mask_blur: mode.maskBlur,
-                    inpainting_fill: mode.inpaintingFill,
-                    inpaint_full_res: mode.inpaintFullRes,
-                    inpaint_full_res_padding: mode.inpaintFullResPadding,
-                    inpainting_mask_invert: mode.inpaintingMaskInvert ? 1 : 0,
-                    denoising_strength: generation.denoisingStrength,
-                    return_partial_candidates: mode.returnPartialCandidates,
-                };
-                await api.img2img(inpaintParams);
-            } else {
-                await api.txt2img(baseParams);
-            }
+            // Call ViteUI generation endpoint
+            await api.viteuiGenerate(workspaceId, JSON.stringify(controllerState), generation.count, generation.executionMode);
             // Completion handled by useWebSocketProgress onTaskComplete
         } catch (error) {
             console.error("Error generating image:", error);
@@ -1302,6 +1470,27 @@ const Workspace = ({ workspaceId, isActive }: {
                         maskCanvasFocused={canvas.maskCanvasFocused}
                     />
                 )}
+
+                <PropertiesPanel
+                    collapsed={ui.propertiesCollapsed}
+                    onToggle={() => setUiState({ propertiesCollapsed: !ui.propertiesCollapsed })}
+                    generationMode={mode.generationMode}
+                    setGenerationMode={() => {}} // Generation mode is handled elsewhere
+                    width={generation.width}
+                    setWidth={(value) => updateWorkspaceState({ generation: { width: value } })}
+                    height={generation.height}
+                    setHeight={(value) => updateWorkspaceState({ generation: { height: value } })}
+                    batchSize={generation.batchSize}
+                    setBatchSize={(value) => updateWorkspaceState({ generation: { batchSize: value } })}
+                    denoisingStrength={generation.denoisingStrength}
+                    setDenoisingStrength={(value) => updateWorkspaceState({ generation: { denoisingStrength: value } })}
+                    inputImage={generation.inputImage}
+                    onImageUpload={(image) => updateWorkspaceState({ generation: { inputImage: image } })}
+                    saveImages={generation.saveImages}
+                    setSaveImages={(value) => updateWorkspaceState({ generation: { saveImages: value } })}
+                    executionMode={generation.executionMode}
+                    setExecutionMode={(value) => updateWorkspaceState({ generation: { executionMode: value } })}
+                />
 
                 {ui.settingsSidebarOpen && (
                     <SettingsSidebar
