@@ -39,7 +39,7 @@ class SwarmViteUIController:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("controller_json",)
     FUNCTION = "build_state"
-    DESCRIPTION = "Builds a ViteUI controller JSON payload for use with the ViteUI preview node."
+    DESCRIPTION = "Builds a ViteUI controller JSON payload for use with the ViteUI studio node."
 
     def build_state(self, mode, prompt, negative_prompt, model, sampler, scheduler, seed, steps, cfg, width, height,
                     init_strength, video_model, video_swap_model, video_swap_percent, video_frames, video_fps, video_steps, video_format,
@@ -104,11 +104,11 @@ class SwarmViteUIStudio:
 
     CATEGORY = "SwarmUI/viteui"
     RETURN_TYPES = ()
-    FUNCTION = "preview"
+    FUNCTION = "studio"
     OUTPUT_NODE = True
-    DESCRIPTION = "Opens the ViteUI Studio editor for the given workspace and shows preview when not in studio view."
+    DESCRIPTION = "Opens the ViteUI Studio editor for the given workspace."
 
-    def preview(self, workspace_id, controller):
+    def studio(self, workspace_id, controller):
         return {}
 
     @classmethod
@@ -119,5 +119,4 @@ class SwarmViteUIStudio:
 NODE_CLASS_MAPPINGS = {
     "SwarmViteUIController": SwarmViteUIController,
     "SwarmViteUIStudio": SwarmViteUIStudio,
-    "SwarmViteUIPreview": SwarmViteUIStudio
 }

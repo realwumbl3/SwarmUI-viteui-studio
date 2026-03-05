@@ -1,49 +1,45 @@
-/* React Flow overrides for dark theme */
-.react-flow__node {
+.app {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+.generate-btn {
+  background-color: #646cff;
+  color: white;
+  border: none;
+  padding: 1rem 2rem;
+  font-size: 1.1rem;
   border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.2s;
 }
 
-.react-flow__node.selected {
-  box-shadow: 0 0 0 2px #3b82f6;
+.generate-btn:hover:not(:disabled) {
+  background-color: #535bf2;
 }
 
-.react-flow__edge {
-  stroke: #6b7280;
+.generate-btn:disabled {
+  background-color: #444;
+  cursor: not-allowed;
 }
 
-.react-flow__edge.selected {
-  stroke: #3b82f6;
-  stroke-width: 3px;
+.images {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1rem;
+  margin-top: 2rem;
 }
 
-.react-flow__controls {
-  bottom: 20px;
-  left: 20px;
+.image-container {
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
-.react-flow__minimap {
-  bottom: 20px;
-  right: 20px;
-}
-
-.react-flow__attribution {
-  display: none;
-}
-
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: #1f2937;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #4b5563;
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #6b7280;
+.image-container img {
+  width: 100%;
+  height: auto;
+  display: block;
 }

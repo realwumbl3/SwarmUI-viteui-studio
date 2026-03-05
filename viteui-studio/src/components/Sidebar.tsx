@@ -1,0 +1,576 @@
+import {
+  ChevronLeft,
+  ChevronRight,
+  Image as ImageIcon,
+  Maximize2,
+  Type,
+  Edit,
+  RefreshCw
+} from 'lucide-react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { TimelapseControlBar } from './TimelapseControlBar'
+import { cn, resolveImageSrc } from '../lib/utils'
+import TimelineItem from './TimelineItem'
+import KeyIndicator from './KeyIndicator'
+import { useWorkspaceContext } from '../contexts/WorkspaceContext'
+import type { Generation } from '../Api'
+import type { GenerationMode } from '../types/components'
+import type { Timeline } from './TimelineItem'
+
+const Sidebar = ({
+  collapsed,
+  onToggle,
+  timeline,
+  currentImage,
+  onPreviewSelect,
+  onCommitPreview,
+  onRejectPreview,
+  onDiscardGeneration,
+  onRestoreGeneration,
+  onUncommitGeneration,
+  onGenerationModeChange,
+  generationMode,
+  onUpscale,
+  getGenerationImageUrl,
+  onRefreshTimeline,
+  onRefreshCanvas,
+  onEditCanvas,
+  canvasRefreshKey,
+  isComposingPartial,
+  workspaceId,
+  onTimelapsePreview,
+  onEnterCanvasMode
+}: {
+  collapsed: boolean
+  onToggle: () => void
+  timeline: Timeline
+  currentImage: string | null
+  onPreviewSelect: (generation: Generation | null) => void
+  onCommitPreview: () => void
+  onRejectPreview: () => void
+  onDiscardGeneration: (generation: Generation) => void
+  onRestoreGeneration: (generation: Generation) => void
+  onUncommitGeneration: (generation: Generation) => void
+  onGenerationModeChange: (mode: GenerationMode) => void
+  generationMode: GenerationMode
+  onUpscale: (item: { id: string; image: string; type: 'timeline' | 'canvas' }) => void
+  getGenerationImageUrl?: (generation: Generation | null) => string | null
+  onRefreshTimeline?: () => void
+  onRefreshCanvas?: () => Promise<void>
+  onEditCanvas?: () => void
+  canvasRefreshKey: number
+  isComposingPartial: boolean
+  workspaceId: string
+  onTimelapsePreview: (videoUrl: string) => void
+  onEnterCanvasMode?: () => void
+}) => {
+  const { appOptions } = useWorkspaceContext()
+  const [committedPage, setCommittedPage] = useState<number>(0)
+  const [discardedPage, setDiscardedPage] = useState<number>(0)
+  const [imageLoadTick, setImageLoadTick] = useState(0)
+  const [editingImages, setEditingImages] = useState<Set<string>>(new Set()) // Track which images are in "Edit Mode" (PNG created)
+  const canvasImgRef = useRef<HTMLImageElement>(null)
+
+  const [canvasDimensions, setCanvasDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 })
+
+  // Update canvas dimensions when image loads or changes
+  useEffect(() => {
+    const img = canvasImgRef.current
+
+    if (img && img.naturalWidth > 0 && img.naturalHeight > 0) {
+      setCanvasDimensions({ width: img.naturalWidth, height: img.naturalHeight })
+    } else {
+      setCanvasDimensions({ width: 0, height: 0 })
+    }
+  }, [currentImage, canvasRefreshKey, imageLoadTick])
+
+  const handleCanvasImageLoad = () => {
+    setImageLoadTick((tick) => tick + 1)
+  }
+
+  const previewImage = getGenerationImageUrl?.(timeline.currentPreview) ?? null
+  const effectiveGenerationQueue = isComposingPartial ? [] : timeline.generationQueue
+  const hasQueueItems = effectiveGenerationQueue.length > 0
+  const hasCommitted = timeline.committedHistory.length > 0
+  const hasDiscarded = timeline.discarded.length > 0
+
+  const itemsPerPage = 5
+
+  // Show latest items first with pagination
+  const committedPages = Math.ceil(timeline.committedHistory.length / itemsPerPage)
+  const discardedPages = Math.ceil(timeline.discarded.length / itemsPerPage)
+
+  const displayedCommitted = timeline.committedHistory.slice(
+    committedPage * itemsPerPage,
+    (committedPage + 1) * itemsPerPage
+  )
+
+  const displayedDiscarded = timeline.discarded.slice(
+    discardedPage * itemsPerPage,
+    (discardedPage + 1) * itemsPerPage
+  )
+
+  const handleTimelineUpscale = (generation: Generation): void => {
+    if (!onUpscale) return
+    const image = getGenerationImageUrl?.(generation)
+    if (!image) return
+    onUpscale({ id: generation.genid, image, type: 'timeline' })
+  }
+
+  // Resize logic
+  const [sidebarWidth, setSidebarWidth] = useState(320)
+  const [isResizing, setIsResizing] = useState(false)
+  const [resizePreviewWidth, setResizePreviewWidth] = useState(320)
+  const resizePreviewWidthRef = useRef(320)
+
+  const startResizing = useCallback(() => {
+    setIsResizing(true)
+    setResizePreviewWidth(sidebarWidth)
+    resizePreviewWidthRef.current = sidebarWidth
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [sidebarWidth])
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    const newWidth = Math.max(300, Math.min(600, e.clientX))
+    setResizePreviewWidth(newWidth)
+    resizePreviewWidthRef.current = newWidth
+  }, [])
+
+  const handleMouseUp = useCallback(() => {
+    setIsResizing(false)
+    setSidebarWidth(resizePreviewWidthRef.current)
+
+    document.removeEventListener('mousemove', handleMouseMove)
+    document.removeEventListener('mouseup', handleMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }, [])
+
+  // Update preview width when sidebar width changes (e.g. initial load)
+  useEffect(() => {
+    setResizePreviewWidth(sidebarWidth)
+    resizePreviewWidthRef.current = sidebarWidth
+  }, [sidebarWidth])
+
+  return (
+    <>
+      {/* Resize Preview Line - Rendered outside aside to be on top of everything */}
+      {isResizing && (
+        <div
+          className="fixed top-0 bottom-0 w-0.5 bg-studio-accent z-[100] pointer-events-none"
+          style={{ left: resizePreviewWidth }}
+        />
+      )}
+
+      <aside
+        className={cn(
+          "studio-sidebar relative overflow-hidden transition-width duration-300 ease-in-out flex flex-col border-r border-studio-border bg-studio-bg",
+          collapsed ? "w-12 transition-all" : ""
+        )}
+        style={{ width: collapsed ? '3rem' : sidebarWidth }}
+      >
+        {/* Resize Handle */}
+        {!collapsed && (
+          <div
+            className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-studio-accent/50 z-50 transition-colors"
+            onMouseDown={startResizing}
+          />
+        )}
+
+        {/* Always-full-width Content Container */}
+        <div className="w-full h-full">
+          {/* Collapsed Icon List */}
+          <div className={cn(
+            "absolute inset-0 flex flex-col items-center gap-4 py-6 px-2 transition-opacity duration-300 ease-in-out",
+            collapsed ? "opacity-100" : "opacity-0 pointer-events-none"
+          )}>
+            <button
+              onClick={onToggle}
+              className="w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-200 hover:scale-110 bg-studio-panel text-studio-textSecondary hover:text-studio-text hover:bg-studio-surface"
+              title="Timeline"
+              type="button"
+            >
+              <ImageIcon size={20} />
+            </button>
+          </div>
+
+          {/* Expanded Content */}
+          <div className={cn(
+            "h-full flex flex-col transition-opacity duration-300 ease-in-out",
+            collapsed ? "opacity-0 pointer-events-none" : "opacity-100"
+          )}>
+            {/* Sidebar Header */}
+            <div className="studio-sidebar-header flex-shrink-0 p-2">
+              {/* Generation Mode Buttons */}
+              <div className="flex items-center bg-studio-surface rounded-lg p-1 border border-studio-border mb-2 gap-1">
+                <button
+                  onClick={() => {
+                    if (generationMode === 'txt2img') {
+                      onToggle();
+                    } else {
+                      onGenerationModeChange('txt2img');
+                    }
+                  }}
+                  className={cn(
+                    "relative flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 simple-block-fill",
+                    generationMode === 'txt2img'
+                      ? "bg-studio-accent text-studio-bg shadow-sm"
+                      : "text-studio-textSecondary hover:text-studio-text hover:bg-studio-surface"
+                  )}
+                  title="Text to Image (Alt+T)"
+                  type="button"
+                >
+                  <Type size={16} />
+                  <span className="hidden sm:inline">Text</span>
+                  <KeyIndicator keys="Alt.T" />
+                </button>
+                <button
+                  onClick={() => {
+                    if (generationMode === 'img2img') {
+                      onToggle();
+                    } else {
+                      onGenerationModeChange('img2img');
+                    }
+                  }}
+                  className={cn(
+                    "relative flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 simple-block-fill",
+                    generationMode === 'img2img'
+                      ? "bg-studio-accent text-studio-bg shadow-sm"
+                      : "text-studio-textSecondary hover:text-studio-text hover:bg-studio-surface"
+                  )}
+                  title="Image to Image (Alt+I)"
+                  type="button"
+                >
+                  <ImageIcon size={16} />
+                  <span className="hidden sm:inline">Image</span>
+                  <KeyIndicator keys="Alt.I" />
+                </button>
+
+                <button
+                  onClick={() => {
+                    if (generationMode === 'inpaint') {
+                      onToggle();
+                    } else {
+                      onGenerationModeChange('inpaint');
+                    }
+                  }}
+                  className={cn(
+                    "relative flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 simple-block-fill",
+                    generationMode === 'inpaint'
+                      ? "bg-studio-accent text-studio-bg shadow-sm"
+                      : "text-studio-textSecondary hover:text-studio-text hover:bg-studio-surface"
+                  )}
+                  title="Inpaint (Alt+N)"
+                  type="button"
+                >
+                  <Edit size={16} />
+                  <span className="hidden sm:inline">Inpaint</span>
+                  <KeyIndicator keys="Alt.N" />
+                </button>
+              </div>
+            </div>
+
+            {/* Sidebar Content */}
+            <div className="studio-sidebar-content flex flex-col min-h-0 flex-1 overflow-hidden">
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                <div className="space-y-2">
+                  <div className="flex flex-col items-start justify-between">
+                    {isComposingPartial ?
+                      (
+                        <div className="text-xs text-studio-textSecondary flex items-center gap-1">
+                          <div className="w-2 h-2 rounded-full border border-studio-accent animate-pulse" />
+                          <span>Composing partial generation…</span>
+                        </div>
+                      )
+                      :
+                      <>
+                        <div className="flex items-center gap-2 text-xs text-studio-textSecondary uppercase tracking-wider">
+                          <span>Generations</span>
+                          {hasQueueItems && <span>({timeline.generationQueue.length})</span>}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onRefreshTimeline?.();
+                            }}
+                            className="p-1 hover:bg-studio-surface rounded text-studio-textSecondary hover:text-studio-text transition-all duration-200"
+                            title="Refresh Timeline"
+                            type="button"
+                          >
+                            <RefreshCw size={12} />
+                          </button>
+                        </div>
+                        {hasQueueItems ? (
+                          <div className="grid grid-cols-1 gap-2">
+                            {effectiveGenerationQueue.map(generation => (
+                              <TimelineItem
+                                key={generation.genid}
+                                item={generation}
+                                isActive={timeline.currentPreview?.genid === generation.genid}
+                                onSelect={() => { onEnterCanvasMode?.(); onPreviewSelect(generation) }}
+                                onDiscard={() => onDiscardGeneration(generation)}
+                                showDiscard
+                                onCommit={onCommitPreview}
+                                onReject={onRejectPreview}
+                                showCommitReject
+                                getGenerationImageUrl={getGenerationImageUrl}
+                                editorAppName={appOptions.editorAppName}
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-studio-text-muted">
+                            {isComposingPartial
+                              ? "Composing partial generation… timeline will reappear once composition completes."
+                              : "No generations yet"}
+                          </div>
+                        )}
+                      </>
+                    }
+                  </div>
+                </div>
+                {/* Canvas */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-studio-textSecondary uppercase tracking-wider">
+                    <span>Canvas</span>
+                  </div>
+                  <div className="studio-panel p-2 rounded-lg space-y-2">
+                    <div className="relative rounded-md overflow-hidden border border-studio-border cursor-pointer simple-block-fill group"
+                      onClick={() => {
+                        // Clear any selected preview to navigate to canvas
+                        if (timeline.currentPreview) {
+                          onPreviewSelect(null)
+                        }
+                        onEnterCanvasMode?.()
+                      }}>
+                      {currentImage ? (
+                        <img
+                          ref={canvasImgRef}
+                          src={`${resolveImageSrc(currentImage, "full") || ''}${canvasRefreshKey > 0 ? `?refresh=${canvasRefreshKey}` : ''}`}
+                          crossOrigin="anonymous"
+                          alt="Canvas"
+                          className="w-full object-contain"
+                          onLoad={handleCanvasImageLoad}
+                        />
+                      ) : (
+                        <div className="w-full h-32 flex items-center justify-center text-xs text-studio-text-muted">
+                          Canvas is empty
+                        </div>
+                      )}
+                      {previewImage && (
+                        <div className="absolute inset-0 bg-studio-accent/10 border border-studio-accent/40" />
+                      )}
+
+                      {/* Refresh Button / Edit Button - Bottom Right */}
+                      {currentImage && (
+                        <button
+                          onClick={async (event) => {
+                            event.stopPropagation()
+
+                            // Extract basic ID from current image URL to use as key
+                            const imageKey = currentImage;
+                            const isEditing = editingImages.has(imageKey);
+
+                            if (isEditing) {
+                              // Already editing, so this is a "Refresh" action
+                              if (onRefreshCanvas) {
+                                await onRefreshCanvas();
+                                // Exit editing mode after refresh creates a new commit
+                                setEditingImages(prev => {
+                                  const newSet = new Set(prev);
+                                  newSet.delete(imageKey);
+                                  return newSet;
+                                });
+                              }
+                            } else {
+                              // Not editing yet, so this is an "Edit" action
+                              onEditCanvas?.();
+                              setEditingImages(prev => {
+                                const newSet = new Set(prev);
+                                newSet.add(imageKey);
+                                return newSet;
+                              });
+                            }
+                          }}
+                          className={cn(
+                            "absolute bottom-2 right-2 rounded bg-studio-panel/90 text-studio-textSecondary p-1.5 hover:bg-studio-surface hover:text-studio-text transition-all duration-200 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity",
+                            editingImages.has(currentImage || "") ? "text-studio-accent" : ""
+                          )}
+                          title={editingImages.has(currentImage || "") ? "Refresh from Source (PNG)" : (appOptions.editorAppName ? `Edit in ${appOptions.editorAppName} (Create PNG)` : "Edit Externally (Create PNG)")}
+                          type="button"
+                        >
+                          {editingImages.has(currentImage || "") ? <RefreshCw size={14} /> : <Edit size={14} />}
+                        </button>
+                      )}
+
+                      {/* Canvas Header Container */}
+                      {currentImage && (
+                        <div className="absolute top-0 left-0 right-0 p-2 bg-gradient-to-b from-studio-panel/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="flex items-center justify-between">
+                            {/* Left side - Resolution */}
+                            <div className="flex items-center">
+                              {canvasDimensions.width > 0 && (
+                                <div className="rounded bg-studio-panel/80 text-studio-textSecondary px-1.5 py-0.5 text-xs">
+                                  {canvasDimensions.width}×{canvasDimensions.height}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Right side - Buttons */}
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  onUpscale?.({
+                                    id: 'canvas-current',
+                                    image: currentImage,
+                                    type: 'canvas'
+                                  })
+                                }}
+                                className="rounded bg-studio-panel/80 text-studio-textSecondary p-1 hover:bg-studio-surface transition-colors"
+                                title="Upscale Canvas"
+                                type="button"
+                              >
+                                <Maximize2 size={12} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Committed Timeline */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-studio-textSecondary uppercase tracking-wider">
+                    <div className="flex items-center gap-2">
+                      <span>Committed</span>
+                      {committedPages > 1 && (
+                        <>
+                          <button
+                            onClick={() => setCommittedPage(Math.max(0, committedPage - 1))}
+                            disabled={committedPage === 0}
+                            className="p-0.5 hover:bg-studio-surface rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Previous page"
+                            type="button"
+                          >
+                            <ChevronLeft size={12} />
+                          </button>
+                          <span className="text-xs">
+                            {committedPage + 1}/{committedPages}
+                          </span>
+                          <button
+                            onClick={() => setCommittedPage(Math.min(committedPages - 1, committedPage + 1))}
+                            disabled={committedPage >= committedPages - 1}
+                            className="p-0.5 hover:bg-studio-surface rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Next page"
+                            type="button"
+                          >
+                            <ChevronRight size={12} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    {hasCommitted && <span>{timeline.committedHistory.length}</span>}
+                  </div>
+                  {/* Timelapse Control Bar */}
+                  <TimelapseControlBar
+                    workspaceId={workspaceId}
+                    onPreview={onTimelapsePreview}
+                    collapsed={collapsed}
+                  />
+
+                  {hasCommitted ? (
+                    <div className="grid grid-cols-1 gap-2">
+                      {displayedCommitted.map(generation => {
+                        const isLatestCommit = generation.genid === timeline.committedHistory[0]?.genid;
+                        return (
+                          <TimelineItem
+                            key={generation.genid}
+                            item={generation}
+                            isActive={timeline.currentPreview?.genid === generation.genid}
+                            onSelect={() => { onEnterCanvasMode?.(); onPreviewSelect(generation) }}
+                            onUpscale={handleTimelineUpscale}
+                            showUpscale
+                            onCommit={isLatestCommit ? () => onUncommitGeneration(generation) : undefined}
+                            showCommitReject={true}
+                            commitLabel="Uncommit"
+                            getGenerationImageUrl={getGenerationImageUrl}
+                            editorAppName={appOptions.editorAppName}
+                          />
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-studio-text-muted">No committed images</div>
+                  )}
+                </div>
+
+                {/* Discarded */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-studio-textSecondary uppercase tracking-wider">
+                    <div className="flex items-center gap-2">
+                      <span>Discarded</span>
+                      {discardedPages > 1 && (
+                        <>
+                          <button
+                            onClick={() => setDiscardedPage(Math.max(0, discardedPage - 1))}
+                            disabled={discardedPage === 0}
+                            className="p-0.5 hover:bg-studio-surface rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Previous page"
+                            type="button"
+                          >
+                            <ChevronLeft size={12} />
+                          </button>
+                          <span className="text-xs">
+                            {discardedPage + 1}/{discardedPages}
+                          </span>
+                          <button
+                            onClick={() => setDiscardedPage(Math.min(discardedPages - 1, discardedPage + 1))}
+                            disabled={discardedPage >= discardedPages - 1}
+                            className="p-0.5 hover:bg-studio-surface rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Next page"
+                            type="button"
+                          >
+                            <ChevronRight size={12} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    {hasDiscarded && <span>{timeline.discarded.length}</span>}
+                  </div>
+                  {hasDiscarded ? (
+                    <div className="grid grid-cols-1 gap-2">
+                      {displayedDiscarded.map(generation => (
+                        <TimelineItem
+                          key={generation.genid}
+                          item={generation}
+                          isActive={timeline.currentPreview?.genid === generation.genid}
+                          onSelect={() => { onEnterCanvasMode?.(); onPreviewSelect(generation) }}
+                          onDiscard={() => onDiscardGeneration(generation)}
+                          onUndiscard={() => onRestoreGeneration(generation)}
+                          undiscardLabel="Undiscard"
+                          showDiscard
+                          getGenerationImageUrl={getGenerationImageUrl}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-studio-text-muted">Nothing discarded</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </aside>
+    </>
+  )
+}
+
+export { Sidebar as default }
