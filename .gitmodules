@@ -1,0 +1,3 @@
+[submodule "ComfyUI-BetterPrompt"]
+	path = ComfyUI-BetterPrompt
+	url = https://github.com/realwumbl3/ComfyUI-BetterPrompt.git
