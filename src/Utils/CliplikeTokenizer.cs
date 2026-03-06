@@ -11,6 +11,12 @@ public partial class CliplikeTokenizer
     /// <summary>The raw array of tokens, wherein a numerical index corresponds to the Token ID.</summary>
     public string[] Tokens;
 
+    /// <summary>If true, this tokenizer is using SentencePiece style (T5, etc) where spaces are represented by ' ' prefix.</summary>
+    public bool IsSentencePiece;
+
+    /// <summary>If true, this tokenizer is case-sensitive.</summary>
+    public bool CaseSensitive;
+
     /// <summary>A small struct of data about a token.</summary>
     /// <param name="ID">The numerical ID for the token.</param>
     /// <param name="Piece">The text-piece string this token represents.</param>
@@ -42,7 +48,8 @@ public partial class CliplikeTokenizer
             gZipStream.CopyTo(outStream);
             data = outStream.ToArray();
         }
-        Tokens = StringConversionHelper.UTF8Encoding.GetString(data).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Tokens = StringConversionHelper.UTF8Encoding.GetString(data).Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Logs.Info($"[CliplikeTokenizer] Loading {fname}, found {Tokens.Length} tokens.");
         for (int i = 0; i < DataMap.Length; i++)
         {
             DataMap[i] = [];
@@ -69,43 +76,47 @@ public partial class CliplikeTokenizer
     /// <summary>Creates and returns the token ID set encoding for a given single word.</summary>
     public int[] EncodeWord(string word)
     {
-        if (Cache is not null && Cache.TryGetValue(word, out int[] result))
+        if (string.IsNullOrEmpty(word))
         {
-            return result;
+            return [];
         }
-        IEnumerable<TokenData> tokens = DataMap[GetIndex(word)];
-        int[] best = null;
-        foreach (TokenData token in tokens)
+        if (Cache is not null && Cache.TryGetValue(word, out int[] cached))
         {
-            if (token.Piece.Length > word.Length)
+            return cached;
+        }
+        List<int> result = [];
+        string remaining = word;
+        while (remaining.Length > 0)
+        {
+            int bucketIdx = GetIndex(remaining);
+            IEnumerable<TokenData> tokens = DataMap[bucketIdx];
+            bool found = false;
+            foreach (TokenData token in tokens)
             {
-                continue;
-            }
-            if (word == token.Piece)
-            {
-                return [token.ID];
-            }
-            if (token.Piece == word[0..token.Piece.Length])
-            {
-                int[] subseq = EncodeWord(word[token.Piece.Length..]);
-                if (best is null || subseq.Length + 1 < best.Length)
+                if (token.Piece.Length <= remaining.Length && remaining.StartsWith(token.Piece))
                 {
-                    best = new int[subseq.Length + 1];
-                    best[0] = token.ID;
-                    Array.Copy(subseq, 0, best, 1, subseq.Length);
+                    result.Add(token.ID);
+                    remaining = remaining[token.Piece.Length..];
+                    found = true;
+                    break;
                 }
             }
+            if (!found)
+            {
+                // Fallback: if no token matches, skip one character to avoid infinite loop
+                remaining = remaining[1..];
+            }
         }
-        if (best is null)
+        if (result.Count == 0 && !string.IsNullOrEmpty(word))
         {
-            Logs.Verbose($"[CliplikeTokenizer] Error: Cannot encode word '{word}', will emit empty");
-            best = [];
+            Logs.Info($"[CliplikeTokenizer] Warning: EncodeWord for '{word}' matched ZERO tokens.");
         }
-        if (Cache is not null)
+        int[] final = [.. result];
+        if (Cache is not null && word.Length < 128) // Only cache reasonably sized words
         {
-            Cache[word] = best;
+            Cache[word] = final;
         }
-        return best;
+        return final;
     }
 
     /// <summary>Compiler-generated-regex for <see cref="Splitter"/>.</summary>
@@ -127,13 +138,26 @@ public partial class CliplikeTokenizer
             text = text.Replace("\\(", "(").Replace("\\)", ")");
         }
         List<Token> output = [];
-        foreach (string word in Splitter.Matches(text.ToLowerInvariant()).Select(m => m.Value))
+        string processedText = CaseSensitive ? text : text.ToLowerInvariant();
+        if (IsSentencePiece)
         {
-            if (!string.IsNullOrWhiteSpace(word))
+            // SentencePiece (T5) style: spaces are '\u2581', and there's usually a leading space
+            string spText = "\u2581" + processedText.Replace(" ", "\u2581");
+            foreach (int token in EncodeWord(spText))
             {
-                foreach (int token in EncodeWord(word + "</w>"))
+                output.Add(new(token, weight));
+            }
+        }
+        else
+        {
+            foreach (string word in Splitter.Matches(processedText).Select(m => m.Value))
+            {
+                if (!string.IsNullOrWhiteSpace(word))
                 {
-                    output.Add(new(token, weight));
+                    foreach (int token in EncodeWord(word + "</w>"))
+                    {
+                        output.Add(new(token, weight));
+                    }
                 }
             }
         }

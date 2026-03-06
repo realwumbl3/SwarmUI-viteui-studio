@@ -44,6 +44,11 @@ public static class UtilAPI
                     throw new SwarmUserErrorException($"Tokenset '{tokenset}' does not exist.");
                 }
                 CliplikeTokenizer tokenizer = new();
+                if (tokenset == "t5")
+                {
+                    tokenizer.IsSentencePiece = true;
+                    tokenizer.CaseSensitive = true;
+                }
                 tokenizer.Load(fullPath);
                 return tokenizer;
             });

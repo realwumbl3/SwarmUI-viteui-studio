@@ -16,11 +16,12 @@ This rule applies to all agent work in this repository.
 
 ## Ownership Boundaries
 
-- Primary product work belongs in `viteui-studio`.
+- Primary product work belongs in `viteui-studio` and `ComfyUI-BetterPrompt`.
 - Keep changes to the original SwarmUI fork minimal and targeted.
 - Prefer additive extension code over modifying core behavior.
 - Place new custom integration code in clearly owned areas and names:
   - `viteui-studio`
+  - `ComfyUI-BetterPrompt`
   - `viteui_studio`
   - `ViteUI`-named modules/files
 
@@ -33,6 +34,8 @@ This rule applies to all agent work in this repository.
   - `src/BuiltinExtensions/ComfyUIBackend/Assets/viteui_studio.css`
 - Comfy node definitions:
   - `src/BuiltinExtensions/ComfyUIBackend/ExtraNodes/SwarmComfyCommon/SwarmViteUI.py`
+- Custom ComfyUI Nodes (Backend and Web Extensions):
+  - `dlbackend/comfy/ComfyUI/custom_nodes/ComfyUI-BetterPrompt`
 - Swarm-side ViteUI bridge/API/state handling:
   - `src/BuiltinExtensions/ComfyUIBackend/ViteUI`
 - Workflow wiring reference:
@@ -49,17 +52,17 @@ This rule applies to all agent work in this repository.
 
 ## Do / Don't
 
-- Do extend in owned ViteUI areas first.
+- Do extend in owned ViteUI or BetterPrompt areas first.
 - Do keep integrations modular, organized, and clearly named.
 - Do annotate unavoidable fork-core edits with short rationale.
-- Don't refactor unrelated SwarmUI subsystems for ViteUI work.
-- Don't move custom logic into generic upstream areas when a ViteUI-owned location is available.
+- Don't refactor unrelated SwarmUI subsystems for ViteUI/BetterPrompt work.
+- Don't move custom logic into generic upstream areas when an owned location is available.
 
 ## Per-Task Checklist
 
 Before finishing any ViteUI task, verify:
 
-1. Can this be implemented in `viteui-studio` first?
+1. Can this be implemented in `viteui-studio` or `ComfyUI-BetterPrompt` first?
 2. Are SwarmUI fork changes minimal and strictly necessary?
 3. Is new code placed in a clearly owned ViteUI location/name?
 4. Does standalone `SwarmViteUIStudio` behavior still preserve normal SwarmUI Generate compatibility?

@@ -236,6 +236,76 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
 
     private static readonly bool IsWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
 
+    private static StringComparer PathComparer => IsWindows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private static bool TryGetFullPath(string path, out string fullPath)
+    {
+        fullPath = null;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+        try
+        {
+            fullPath = Path.GetFullPath(path);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string ResolveSymlinkDirectoryTarget(string path)
+    {
+        try
+        {
+            DirectoryInfo info = new(path);
+            if (!info.Exists || !info.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                return null;
+            }
+            FileSystemInfo target = info.ResolveLinkTarget(true);
+            if (target is DirectoryInfo dirTarget)
+            {
+                return dirTarget.FullName;
+            }
+        }
+        catch
+        {
+            return null;
+        }
+        return null;
+    }
+
+    private static IEnumerable<string> GetSymlinkedDirectoryTargets(IEnumerable<string> roots)
+    {
+        HashSet<string> seen = new(PathComparer);
+        foreach (string root in roots)
+        {
+            if (!TryGetFullPath(root, out string fullRoot))
+            {
+                continue;
+            }
+            if (!Directory.Exists(fullRoot))
+            {
+                continue;
+            }
+            foreach (string dir in Directory.EnumerateDirectories(fullRoot))
+            {
+                string target = ResolveSymlinkDirectoryTarget(dir);
+                if (string.IsNullOrWhiteSpace(target))
+                {
+                    continue;
+                }
+                if (TryGetFullPath(target, out string targetFull) && seen.Add(targetFull))
+                {
+                    yield return targetFull;
+                }
+            }
+        }
+    }
+
     public void EnsureComfyFile()
     {
         lock (ComfyModelFileHelperLock)
@@ -271,6 +341,42 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                 }
                 return ret == "|" ? "" : ret;
             }
+            string startScript = Settings?.StartScript?.Trim(' ', '"', '\'', '\n', '\r', '\t') ?? "";
+            string comfyCustomNodesPath = "";
+            if (!string.IsNullOrWhiteSpace(startScript))
+            {
+                string startDir = Path.GetDirectoryName(startScript);
+                if (!string.IsNullOrWhiteSpace(startDir))
+                {
+                    comfyCustomNodesPath = Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, startDir, "custom_nodes");
+                }
+            }
+            HashSet<string> customNodePathSet = new(PathComparer);
+            List<string> customNodePaths = [];
+            void addCustomNodePath(string path)
+            {
+                if (TryGetFullPath(path, out string fullPath) && customNodePathSet.Add(fullPath))
+                {
+                    customNodePaths.Add(fullPath);
+                }
+            }
+            addCustomNodePath(ComfyUIBackendExtension.Folder + "/DLNodes");
+            addCustomNodePath(ComfyUIBackendExtension.Folder + "/ExtraNodes");
+            foreach (string path in CustomNodePaths)
+            {
+                addCustomNodePath(path);
+            }
+            List<string> symlinkRoots = new(customNodePaths);
+            if (!string.IsNullOrWhiteSpace(comfyCustomNodesPath))
+            {
+                symlinkRoots.Add(comfyCustomNodesPath);
+            }
+            foreach (string target in GetSymlinkedDirectoryTargets(symlinkRoots))
+            {
+                addCustomNodePath(target);
+            }
+            string customNodesList = customNodePaths.JoinString(";");
+
             foreach (string root in roots)
             {
                 string rootFixed = Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, root);
@@ -300,7 +406,7 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
             yaml += $"""
             # Explicitly separate the _nodes list to prevent it from being is_default
             swarmui_nodes:
-                custom_nodes: {buildSection(ComfyUIBackendExtension.Folder, $"{Path.GetFullPath(ComfyUIBackendExtension.Folder + "/DLNodes")};{Path.GetFullPath(ComfyUIBackendExtension.Folder + "/ExtraNodes")};{CustomNodePaths.Select(Path.GetFullPath).JoinString(";")}")}
+                custom_nodes: {buildSection(ComfyUIBackendExtension.Folder, customNodesList)}
 
             """;
             Directory.CreateDirectory(Utilities.CombinePathWithAbsolute(roots[0], Program.ServerSettings.Paths.SDClipVisionFolder.Split(';')[0]));
